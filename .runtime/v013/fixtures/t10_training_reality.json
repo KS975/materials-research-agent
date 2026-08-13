@@ -1,0 +1,55 @@
+{
+  "stage": "V0.1.3-A_dataset_reality_check",
+  "project_id": 9010,
+  "company_id": "V013-T10-TEST",
+  "target_metric": "冲击强度",
+  "summary": {
+    "total_samples": 60,
+    "formula_present": 60,
+    "process_present": 60,
+    "target_present": 60,
+    "conditions_present": 60,
+    "core_closed_formula_process_target": 60,
+    "strict_closed_with_conditions": 60
+  },
+  "target": {
+    "metric": "冲击强度",
+    "resolved_field_ids": [
+      15774
+    ],
+    "present_count": 60,
+    "numeric_count": 60,
+    "non_numeric_count": 0,
+    "conflicting_sample_ids": [],
+    "min": 24.424765,
+    "max": 49.693849,
+    "mean": 37.66483408333333
+  },
+  "test_conditions": {
+    "present_count": 60,
+    "missing_count": 0,
+    "unique_nonempty_signatures": 1,
+    "signature_counts": {
+      "ISO_179_23C_notched": 60
+    }
+  },
+  "field_coverage": {
+    "formula": {
+      "formula::ABS": 60,
+      "formula::PC": 60,
+      "formula::增韧剂": 60
+    },
+    "process": {
+      "process::加工温度": 60,
+      "process::螺杆转速": 60
+    }
+  },
+  "unresolved_dynamic_fields": {},
+  "duplicate_sample_name_groups": 0,
+  "duplicate_formula_process_target_groups": 0,
+  "fixture": {
+    "name": "V0.1.3-T10-qualified-training-fixture",
+    "seed": 42,
+    "note": "Synthetic fixture for pipeline verification only; not scientific evidence."
+  }
+}

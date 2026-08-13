@@ -1,0 +1,31 @@
+{
+  "stage": "V0.1.3-B_modeling_gate",
+  "project_id": 9010,
+  "target_metric": "冲击强度",
+  "source_reality_json": ".runtime\\v013\\fixtures\\t10_training_reality.json",
+  "dataset_summary": {
+    "total_samples": 60,
+    "formula_present": 60,
+    "process_present": 60,
+    "target_present": 60,
+    "target_numeric_count": 60,
+    "conditions_present": 60,
+    "core_closed_samples": 60,
+    "strict_closed_samples": 60,
+    "condition_coverage_on_core": 1.0,
+    "test_condition_unique_nonempty_signatures": 1,
+    "unresolved_dynamic_field_instances": 0,
+    "duplicate_sample_name_groups": 0,
+    "duplicate_formula_process_target_groups": 0
+  },
+  "gate_policy": {
+    "min_core_for_any_model": 10,
+    "min_core_for_pass": 30,
+    "min_condition_coverage": 0.8
+  },
+  "decision": "PASS",
+  "training_allowed": true,
+  "official_model_allowed": true,
+  "fail_reasons": [],
+  "warnings": []
+}

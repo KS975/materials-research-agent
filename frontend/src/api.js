@@ -64,3 +64,16 @@ export async function chat(message, history, scope, attachmentIds=[]){
   if(!r.ok) throw new Error(data?.detail||`HTTP ${r.status}`);
   return data;
 }
+
+export async function getModelingStatus(projectId, targetMetric, scope){
+  const params = new URLSearchParams({
+    project_id:String(projectId),
+    target_metric:targetMetric,
+  });
+  const r=await fetch(`/api/v1/ml-ui/status?${params.toString()}`,{
+    headers:scopeHeaders(scope),
+  });
+  const data=await r.json().catch(()=>null);
+  if(!r.ok) throw new Error(data?.detail||`建模状态读取失败 HTTP ${r.status}`);
+  return data;
+}

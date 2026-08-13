@@ -1,0 +1,12 @@
+{
+  "sample_name": "T13_borderline",
+  "features": {
+    "formula::ABS": 23.304061,
+    "formula::PC": 63.071162,
+    "formula::增韧剂": 13.624777,
+    "process::加工温度": 222.6178334,
+    "process::螺杆转速": 239.221048
+  },
+  "fixture_note": "Expected: BORDERLINE",
+  "perturbed_feature": "process::加工温度"
+}

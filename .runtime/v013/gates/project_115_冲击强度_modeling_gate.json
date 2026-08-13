@@ -1,0 +1,40 @@
+{
+  "stage": "V0.1.3-B_modeling_gate",
+  "project_id": 115,
+  "target_metric": "冲击强度",
+  "source_reality_json": ".runtime\\v013\\reality\\project_115_冲击强度_reality.json",
+  "dataset_summary": {
+    "total_samples": 31,
+    "formula_present": 11,
+    "process_present": 15,
+    "target_present": 7,
+    "target_numeric_count": 7,
+    "conditions_present": 0,
+    "core_closed_samples": 2,
+    "strict_closed_samples": 0,
+    "condition_coverage_on_core": 0.0,
+    "test_condition_unique_nonempty_signatures": 0,
+    "unresolved_dynamic_field_instances": 18,
+    "duplicate_sample_name_groups": 6,
+    "duplicate_formula_process_target_groups": 2
+  },
+  "gate_policy": {
+    "min_core_for_any_model": 10,
+    "min_core_for_pass": 30,
+    "min_condition_coverage": 0.8
+  },
+  "decision": "FAIL",
+  "training_allowed": false,
+  "official_model_allowed": false,
+  "fail_reasons": [
+    "配方+工艺+目标闭环样本仅 2 条，低于最低建模准入值 10",
+    "没有任何同时包含测试条件的完整闭环样本",
+    "闭环样本测试条件覆盖不足：0/2 (0.0%)，最低要求 80%",
+    "没有可识别的非空测试条件签名，无法证明目标值可比"
+  ],
+  "warnings": [
+    "存在 18 个未解析动态字段实例",
+    "存在 6 组重复样品名称",
+    "存在 2 组重复配方-工艺-目标组合"
+  ]
+}
