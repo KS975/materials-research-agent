@@ -1,0 +1,13 @@
+app/main.py：
+
+import 区新增：
+from api.files import router as files_router
+
+include_router 区新增：
+app.include_router(files_router)
+
+版本号可改为：
+version="0.1.2-dev1"
+
+如果你已经有 chat_ui_router，也继续保留：
+app.include_router(chat_ui_router)

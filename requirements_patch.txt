@@ -1,0 +1,8 @@
+requirements.txt 新增：
+
+python-multipart==0.0.22
+pypdf==6.7.5
+python-docx==1.2.0
+
+安装可直接执行：
+pip install python-multipart pypdf python-docx

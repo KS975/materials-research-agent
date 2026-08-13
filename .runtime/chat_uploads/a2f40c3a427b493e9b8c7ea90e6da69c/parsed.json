@@ -1,0 +1,34 @@
+{
+  "attachment_id": "a2f40c3a427b493e9b8c7ea90e6da69c",
+  "filename": "MySQL 数据库结构.docx",
+  "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "parser": "python-docx",
+  "page_count": null,
+  "char_count": 2241,
+  "chunk_count": 2,
+  "created_at": "2026-08-12T07:08:26.982592+00:00",
+  "expires_at": "2026-08-12T10:08:26.982592+00:00",
+  "owner": {
+    "user_id": "local-test",
+    "company_id": "6a4b19f62d0e000027001eb8",
+    "project_ids": [
+      115
+    ]
+  },
+  "chunks": [
+    {
+      "index": 0,
+      "text": "MySQL 数据库结构\n\n当前 V0.1.1 实际连接的业务数据库为：\n\nMySQL\n\n└── materials\n\nV0.1.1 已经实际查询和验证过的核心表如下：\n\n原料表\n\n获取全部内容方法：SELECT * FROM materials.sample_materials ORDER BY id;\n\n样品表\n\n获取全部内容方法：SHOW CREATE TABLE materials.eln_sample;\n\n配方组分定义表\n\n获取全部内容方法：SELECT\n\nid AS sample_id,\n\nname AS sample_name,\n\ncompany,\n\nproject_id,\n\nrecipes\n\nFROM materials.eln_sample\n\nWHERE recipes IS NOT NULL\n\nAND TRIM(CAST(recipes AS CHAR)) NOT IN ('', '{}', 'null')\n\nORDER BY id;\n\n工艺表\n\n获取全部内容方法：\n\nSELECT id AS sample_id, name AS sample_name, company, project_id, craft_detail, craft_param, create_time, update_time FROM materials.eln_sample ORDER BY id;\n\n测试/性能表\n\n获取全部内容方法：\n\nSELECT\n\nid AS sample_id,\n\nname AS sample_name,\n\ncompany,\n\nproject_id,\n\nperformances,\n\nservice_performances,\n\nconditions,\n\ncreate_time,\n\nupdate_time\n\nFROM materials.eln_sample\n\nORDER BY id;\n\n项目/实验关联字段\n\n样品 → 项目（eln_sample.project_id， mat_project.id）\n\n归档数据 → 样品（archive_data.data_id， eln_sample.id）\n\n样品 → 合成实验（eln_synthesis_exp.sample_id， eln_sample.id）\n\n样品 → 测试 / 验证（eln_verify_item_sample.sample_id， eln_sample.ide）\n\n当前权限系统接口或相关代码（.env）",
+      "page": null,
+      "paragraph_start": 1,
+      "paragraph_end": 43
+    },
+    {
+      "index": 1,
+      "text": "APP_NAME=materials-research-agent\nAPP_ENV=development\nLOG_LEVEL=INFO\n\n# =========================\n# Materials business MySQL\n# V0.1.1: READ ONLY\n# =========================\nBUSINESS_DB_HOST=39.101.193.63\nBUSINESS_DB_PORT=3306\nBUSINESS_DB_USER=root\nBUSINESS_DB_PASSWORD=matcloud\nBUSINESS_DB_NAME=materials\nBUSINESS_DB_CHARSET=utf8mb4\nBUSINESS_DB_CONNECT_TIMEOUT=10\nBUSINESS_DB_READ_TIMEOUT=30\n\n# =========================\n# Permission Adapter\n# development_header is ONLY for local integration before\n# the real MatCloud/材料智元 login context adapter is confirmed.\n# =========================\nPERMISSION_MODE=development_header\n\n# For local smoke scripts only.\nDEV_USER_ID=\nDEV_COMPANY_ID=\nDEV_PROJECT_IDS=120\n\n当前 Chat 登录态 / Token / User Context 的传递方式\n\n目前还没有接入材数智元正式 Chat 登录态和 Token，因此 V0.1.1 使用开发态 Header 模拟登录用户上下文。\n\n当前模式：\n\nPERMISSION_MODE=development_header\n\n表名 | 作用 | V0.1.1 是否实际使用\n\nmat_project | 项目主表 | ✅\n\neln_sample | 样品主表 | ✅\n\narchive_data | 数据归档表 | ✅\n\nsample_materials | 原料/配方字段定义 | ✅\n\ndata_column | 工艺、性能等动态字段定义 | ✅\n\neln_synthesis_exp | 合成实验记录 | ✅ 查询过，但部分样品无记录\n\neln_verify_item | 测试/验证项目 | ✅ 查询过，但部分样品无记录\n\neln_verify_item_sample | 测试项目与样品关联 | ✅\n\neln_verify_exp | 验证实验记录 | ✅",
+      "page": null,
+      "paragraph_start": 44,
+      "paragraph_end": 58
+    }
+  ]
+}

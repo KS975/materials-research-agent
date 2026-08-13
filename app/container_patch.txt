@@ -1,0 +1,19 @@
+1) app/container.py import 区新增：
+
+from file_processing import ChatFileParser
+from runtime.chat_attachments import ChatAttachmentStore
+from skills.current_attachment import CurrentAttachmentSkill
+
+2) 在 self.llm = create_llm_provider(settings) 之后新增：
+
+        self.chat_file_parser = ChatFileParser()
+        self.chat_attachment_store = ChatAttachmentStore(
+            settings.chat_upload_dir,
+            settings.chat_upload_ttl_minutes,
+        )
+        self.current_attachment_skill = CurrentAttachmentSkill(
+            self.chat_attachment_store,
+            self.llm,
+        )
+
+注意：不要改 V0.1.1 的 6 个 Tool、Repository 或 MySQL 代码。

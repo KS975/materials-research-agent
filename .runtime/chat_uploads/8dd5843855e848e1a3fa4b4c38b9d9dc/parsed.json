@@ -1,0 +1,48 @@
+{
+  "attachment_id": "8dd5843855e848e1a3fa4b4c38b9d9dc",
+  "filename": "材料实验测试文档10 - Copy.pdf",
+  "media_type": "application/pdf",
+  "parser": "pypdf",
+  "page_count": 4,
+  "char_count": 1577,
+  "chunk_count": 4,
+  "created_at": "2026-08-12T07:24:58.300588+00:00",
+  "expires_at": "2026-08-12T10:24:58.300588+00:00",
+  "owner": {
+    "user_id": "local-test",
+    "company_id": "6a4b19f62d0e000027001eb8",
+    "project_ids": [
+      115
+    ]
+  },
+  "chunks": [
+    {
+      "index": 0,
+      "text": "材料合成实验数据测试文档\n用途：测试 PDF 上传 → MinerU 解析 → DeepSeek 八表结构化提取 → 动态表格。\n说明：本文档包含两个样品、动态配方物质、测试条件、服役条件和附件目录。未提供的信息应保持为\nnull，不得推断。\n实验一：样品 LLZO-PEO-01\n样品信息\n样品名称：LLZO-PEO-01\n产品类型：复合固态电解质膜\n工艺：溶液浇铸 + 热压\n配方\n物质名称\n用量\n单位\n备注\nLLZO\n60\nwt%\n立方相粉体\nPEO\n30\nwt%\n分子量约 600,000\nLiTFSI\n10\nwt%\nEO:Li = 12:1\nSiO2\n0.5\nwt%\n纳米填料；为动态物质列测试\n工艺参数\n将 PEO 与 LiTFSI 溶解于乙腈，加入 LLZO 与 SiO2 后磁力搅拌 6 h。浇铸后在 60 ℃ 真空干燥 12\nh。热压温度：180 ℃；热压时间：20 min；压力：10 MPa。\n测试性能\n测试性能\n结果\n单位\n平均粒径\n1.2\num\n室温离子电导率\n3.5 x 10^-4\nS/cm\n杨氏模量\n125\nMPa\n电化学窗口\n4.6\nV\n致密度\n96.8\n%\n孔隙率\n3.2\n%\n测试条件\n测试性能\n测试条件\n测试条件取值\n测试条件类型\n室温离子电导率\n温度\n25 ℃\n环境\n室温离子电导率\n频率范围\n1 MHz - 0.1 Hz\n仪器\n杨氏模量\n拉伸速率\n5 mm/min\n机械测试\n电化学窗口\n扫描速率\n1 mV/s\n电化学测试",
+      "page": 1,
+      "paragraph_start": null,
+      "paragraph_end": null
+    },
+    {
+      "index": 1,
+      "text": "服役性能与条件\n循环 1000 次后电导率保留率：88%。服役温度：45 ℃；电流密度：0.2\nmA/cm2；循环模式：恒流充放电。\n附件目录：性能 - 室温离子电导率；附件路径 - attachments/LLZO-PEO-01_EIS.png\n附件目录：性能 - 拉伸曲线；附件路径 - attachments/LLZO-PEO-01_tensile.csv",
+      "page": 2,
+      "paragraph_start": null,
+      "paragraph_end": null
+    },
+    {
+      "index": 2,
+      "text": "实验二：样品 LATP-PVDF-02\n样品名称：LATP-PVDF-02\n产品类型：无机-聚合物复合电解质片\n工艺：球磨混合 + 冷压 + 退火\n配方\n物质名称\n用量\n单位\n备注\nLATP\n70\nwt%\n主相\nPVDF-HFP\n25\nwt%\n聚合物基体；新物质\nLiClO₄\n5\nwt%\n锂盐；新物质\n工艺参数\n原料在 400 rpm 下球磨 4 h。冷压压力：200 MPa；保压时间：5 min。随后在 120 ℃ 退火 2\nh。本文档没有提供热压温度和热压时间，因此这两个字段应为 null。\n测试性能\n测试性能\n结果\n单位\n平均粒径\n0.8\num\n室温离子电导率\n1.1 x 10^-4\nS/cm\n杨氏模量\n未测试\n电化学窗口\n4.2\nV\n致密度\n92.5\n%\n孔隙率\n7.5\n%\n测试条件\n室温离子电导率在 25 ℃、1 MHz - 1 Hz 条件下测得。电化学窗口采用不锈钢/电解质/锂结构，扫描速率\n0.5 mV/s。\n服役性能与条件\n循环 1000 次后电导率保留率：未提供。服役温度：60 ℃；相对湿度：< 5% RH。\n附件目录：性能 - 电化学窗口；附件路径 - attachments/LATP-PVDF-02_LSV.pdf",
+      "page": 3,
+      "paragraph_start": null,
+      "paragraph_end": null
+    },
+    {
+      "index": 3,
+      "text": "预期提取检查清单\n检查项\n预期结果\n实验数量\n2 个样品\n统一关联键\nLLZO-PEO-01、LATP-PVDF-02\n动态配方列\n应包含 SiO2、PVDF-HFP、LiClO₄\n缺失字段\nLATP-PVDF-02 的热压温度、热压时间、循环1000次后电导率保留率应为 null\n多条记录\n测试条件、服役条件、附件目录应保留为多条记录\n单位保留\n℃、min、MPa、um、S/cm、mV/s 等应完整保留\n此页用于人工核对系统结果，不应被识别为新的实验样品。",
+      "page": 4,
+      "paragraph_start": null,
+      "paragraph_end": null
+    }
+  ]
+}

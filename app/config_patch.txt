@@ -1,0 +1,12 @@
+在 Settings 类中（runtime 配置附近即可）新增：
+
+    # V0.1.2-A: current Chat temporary attachments (NOT Qdrant)
+    chat_upload_dir: str = ".runtime/chat_uploads"
+    chat_upload_max_mb: int = 25
+    chat_upload_ttl_minutes: int = 180
+
+.env.example 同步新增：
+
+CHAT_UPLOAD_DIR=.runtime/chat_uploads
+CHAT_UPLOAD_MAX_MB=25
+CHAT_UPLOAD_TTL_MINUTES=180
