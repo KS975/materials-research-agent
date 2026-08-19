@@ -6,8 +6,8 @@
   "best_model": {
     "model_name": "ExtraTreesRegressor",
     "r2": 0.8059683093767169,
-    "mae": 2.9415762724999914,
-    "rmse": 3.479030231999682,
+    "mae": 2.94157627249999,
+    "rmse": 3.479030231999681,
     "model_file": ".runtime\\v013\\model_comparison\\project_9010_冲击强度\\best_model.joblib"
   },
   "feature_importance": [

@@ -28,7 +28,7 @@ class SampleRepository:
             FROM eln_sample
             WHERE id = %s
               AND company = %s
-              AND (`delete` IS NULL OR `delete` = 0)
+              AND (`delete` IS NULL OR `delete` IN (0, 2))
               AND {scope_sql}
             LIMIT 1
         """
@@ -42,7 +42,7 @@ class SampleRepository:
             FROM eln_sample
             WHERE name = %s
               AND company = %s
-              AND (`delete` IS NULL OR `delete` = 0)
+              AND (`delete` IS NULL OR `delete` IN (0, 2))
               AND {scope_sql}
             ORDER BY id DESC
             LIMIT {lim}
@@ -56,7 +56,7 @@ class SampleRepository:
             SELECT id, name, project_id, company, sample_type, create_time, update_time
             FROM eln_sample
             WHERE company = %s
-              AND (`delete` IS NULL OR `delete` = 0)
+              AND (`delete` IS NULL OR `delete` IN (0, 2))
               AND {scope_sql}
               AND name LIKE %s
             ORDER BY id DESC

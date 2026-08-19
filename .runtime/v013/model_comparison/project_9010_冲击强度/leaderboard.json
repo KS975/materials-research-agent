@@ -27,8 +27,8 @@
     {
       "model_name": "ExtraTreesRegressor",
       "r2": 0.8059683093767169,
-      "mae": 2.9415762724999914,
-      "rmse": 3.479030231999682,
+      "mae": 2.94157627249999,
+      "rmse": 3.479030231999681,
       "feature_importance": [
         {
           "feature": "formula::PC",
@@ -55,9 +55,9 @@
     },
     {
       "model_name": "RandomForestRegressor",
-      "r2": 0.7399793258519947,
-      "mae": 3.1868873933333024,
-      "rmse": 4.0274096726257165,
+      "r2": 0.7399793258519948,
+      "mae": 3.186887393333301,
+      "rmse": 4.027409672625716,
       "feature_importance": [
         {
           "feature": "formula::PC",
@@ -120,8 +120,8 @@
   "best_model": {
     "model_name": "ExtraTreesRegressor",
     "r2": 0.8059683093767169,
-    "mae": 2.9415762724999914,
-    "rmse": 3.479030231999682,
+    "mae": 2.94157627249999,
+    "rmse": 3.479030231999681,
     "model_file": ".runtime\\v013\\model_comparison\\project_9010_冲击强度\\best_model.joblib"
   },
   "scientific_status": {

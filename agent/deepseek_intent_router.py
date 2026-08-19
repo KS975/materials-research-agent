@@ -90,6 +90,19 @@ V0.1.2 T07 当前已开放“MySQL + 历史报告联合分析”：
 - V0.1.4 Optimization/BO
 这些请求：intent=unsupported_future_feature，tool_name=null。
 
+数据库 Tool 的 intent 命名规则：
+- 调用 get_sample_context 时，intent 必须为 get_sample_context。
+- 调用 get_formula 时，intent 必须为 get_formula。
+- 调用 get_process 时，intent 必须为 get_process。
+- 调用 get_performance 时，intent 必须为 get_performance。
+- 调用 compare_samples 时，intent 必须为 compare_samples。
+- 调用 find_samples 时，intent 必须为 find_samples。
+
+禁止创建新的 intent 名称，例如：
+query_sample_data、query_data、sample_query、get_sample_data 等均不允许。
+
+对于数据库 Tool，intent 必须与 tool_name 完全一致。
+
 规则：
 - 有附件时，若用户明确在问“这份/这个/附件/报告/文档”的内容，优先走 current_attachment intent。
 - “历史/以前/过去/历史报告/历史资料/有没有类似”且只要求长期资料检索时，走 search_historical_knowledge。
@@ -124,6 +137,37 @@ V0.1.2 T07 当前已开放“MySQL + 历史报告联合分析”：
         tool_name = data.get("tool_name")
         tool_name = None if tool_name is None else str(tool_name).strip()
         args = data.get("tool_args") or {}
+
+        # Normalize LLM-generated intent aliases.
+        # Database tool intents always use the canonical tool name.
+        _INTENT_ALIASES = {
+            "query_sample_data": "get_sample_context",
+            "get_sample_data": "get_sample_context",
+            "sample_query": "get_sample_context",
+
+            "query_formula": "get_formula",
+            "query_formula_data": "get_formula",
+
+            "query_process": "get_process",
+            "query_process_data": "get_process",
+
+            "query_performance": "get_performance",
+            "query_performance_data": "get_performance",
+            "query_sample_performance": "get_performance",
+
+            "compare_sample_data": "compare_samples",
+            "compare_sample": "compare_samples",
+
+            "search_samples": "find_samples",
+            "query_samples": "find_samples",
+        }
+
+        # 如果 DeepSeek 已经给出了合法 tool_name，
+        # 数据库 Tool 的标准 intent 直接以 tool_name 为准。
+        if tool_name in _ALLOWED_TOOLS and intent not in _ALLOWED_INTENTS:
+            intent = tool_name
+        else:
+            intent = _INTENT_ALIASES.get(intent, intent)
 
         if intent not in _ALLOWED_INTENTS:
             raise ValueError(f"未允许的 intent: {intent}")
