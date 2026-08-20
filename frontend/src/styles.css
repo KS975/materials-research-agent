@@ -84,3 +84,67 @@
 .demoBoundary b{color:#aa9364;font-size:7px;margin-right:4px}.demoBoundary span{padding:2px 5px;border:1px solid rgba(226,184,87,.07);border-radius:999px;color:#746d60;font-size:6px}
 .demoScope{padding:7px 9px;border:1px solid rgba(255,255,255,.04);border-radius:8px}.demoScope summary{cursor:pointer;color:#68758a;font-size:7px}.demoScope p{color:#68758a;font-size:7px}.demoScope code{color:#9fb0c5;font-size:7px}
 @media(max-width:1050px){.demoVersionRow{grid-template-columns:110px 85px 1fr}.demoVersionAction{grid-column:1/-1}.demoHero{display:grid}.demoHeroStatus{justify-items:start}}
+
+/* =====================================================================
+   Presentation typography + light theme
+   Source-of-truth patch: keeps the 16px chat/input font fix and switches
+   the complete V0.1.1 -> V0.3 UI to a white-background / dark-text theme.
+   ===================================================================== */
+
+/* Typography hierarchy */
+.brand b{font-size:18px}.brand span{font-size:14px}.section{font-size:15px}
+.version b{font-size:15px}.version b em{font-size:13px}.version strong{font-size:16px}.version span{font-size:14px}
+.scope>button span{font-size:14px}.scope>button b{font-size:15px}.scopeFields label{font-size:13px}.scopeFields input{font-size:14px}.scopeFields p{font-size:13px}.status{font-size:14px}
+header h1{font-size:20px}header p{font-size:14px}.badge{font-size:14px}header button{font-size:14px}
+.quick>small{font-size:14px}.quick button span{font-size:13px}.quick button b{font-size:14px}
+.avatar{font-size:14px}.msgcol>small{font-size:13px}.content{font-size:16px}
+.detail>button,.meta code,.detailBody p,.chips span,.detailBody details,.detailBody pre{font-size:13px}
+.loading{font-size:14px}.error{font-size:14px}.error b{font-size:13px}
+.composer textarea{font-size:16px}.upload{font-size:13px}.upload span{font-size:12px}footer>p{font-size:13px}
+.attachmentChip,.uploadState{font-size:13px}
+.mlCardHead small,.statusPill,.metric span,.metric small,.permitLine,.reasonList strong,.reasonList span,.modelName,.cardFoot,.emptyCard,.adMain span,.adMain small,.mlDisclaimer,.designHead>span,.predictionGrid span,.predictionGrid small,.designMeta,.designCard details,.experimentCard details,.boPolicy span,.nearMisses span{font-size:12px}
+.mlCardHead b{font-size:15px}.metric b,.adMain b,.predictionGrid b{font-size:16px}.designHead>b,.noFeasible>b{font-size:14px}.noFeasible p{font-size:13px}
+.feedbackToolbar button,.feedbackAction{font-size:13px}.fixtureFlag{font-size:12px}.roundItem b{font-size:14px}.roundItem span,.roundItem small{font-size:12px}
+.datasetLineage b{font-size:13px}.datasetLineage span,.datasetLineage small{font-size:12px}.modelCompare span{font-size:12px}.modelCompare b{font-size:16px}.modelCompare small{font-size:12px}
+.checkpointSteps span{font-size:12px}.feedbackPrediction>span{font-size:12px}.feedbackPrediction b{font-size:13px}.feedbackExperiment details,.feedbackExperiment pre{font-size:12px}
+.feedbackForm select,.feedbackForm input{font-size:13px}.feedbackForm label span,.feedbackCondition,.feedbackInlineError{font-size:12px}.feedbackLiveAnswer{font-size:16px}
+.companyProductList span,.companyMetricList span,.companyFocusList span{font-size:13px}.companyProductList b,.companyMetricList b,.companyFocusList b{font-size:13px}.companyProductList small,.companyMetricList small,.companyFocusList small{font-size:12px}
+.autonomyLiveAnswer{font-size:16px}.autonomyToolbar button,.safetyWarning{font-size:13px}.activeJob b{font-size:13px}.activeJob span,.activeJob small{font-size:12px}
+.currentDataScope span{font-size:12px}.currentDataScope b{font-size:14px}.currentDataScope em{font-size:12px}.companyHighlights span{font-size:13px}.scopeHint{font-size:12px}.companyGlobalDetails summary{font-size:13px}.companyGlobalDetails>p,.companySourceLine{font-size:12px}
+.demoHero small{font-size:12px}.demoHero h2{font-size:20px}.demoHero p{font-size:14px}.demoHeroStatus b{font-size:18px}.demoHeroStatus span{font-size:12px}
+.demoStoryline span,.demoStoryline b{font-size:12px}.demoVersionName b{font-size:15px}.demoVersionName span{font-size:12px}.demoVersionCaps span{font-size:11px}
+.demoVersionAction code,.demoVersionAction p,.demoLearningFlow span,.demoLearning p,.demoBoundary b,.demoBoundary span,.demoScope summary,.demoScope p,.demoScope code{font-size:12px}
+
+/* Light palette */
+:root{color:#111827;background:#fff;--line:#e5e7eb;--text:#111827;--muted:#4b5563;--sub:#6b7280;--accent:#4f6fe5}
+html,body,#root{background:#fff;color:#111827}
+body{color:#111827}
+.shell{background:#fff}
+aside{background:#fff;border-right-color:#e5e7eb}
+header,footer{background:#fff;border-color:#e5e7eb}
+.brand b,header h1,.version strong,.version b,.scope>button b,.quick button b,.content,.mlCardHead b,.metric b,.adMain b,.predictionGrid b,.designHead>b,.roundItem b,.modelCompare b,.companyProductList b,.companyMetricList b,.companyFocusList b,.activeJob b,.demoHero h2,.demoHeroStatus b,.demoVersionName b{color:#111827}
+.brand span,.section,.version,.version span,.version .dot,.scope>button span,.scope>button i,.scopeFields label,.scopeFields p,.status,header p,.quick>small,.quick button span,.msgcol>small,.detail>button,.detailBody details,.loading span,footer>p,.uploadState,.cardFoot,.emptyCard,.metric span,.metric small,.permitLine,.reasonList strong,.reasonList span,.adMain span,.adMain small,.mlDisclaimer,.designHead>span,.predictionGrid span,.predictionGrid small,.designMeta,.designCard details,.experimentCard details,.nearMisses span,.roundItem span,.roundItem small,.datasetLineage span,.datasetLineage small,.modelCompare span,.modelCompare small,.feedbackCondition,.feedbackForm label span,.companyProductList span,.companyMetricList span,.companyProductList small,.companyMetricList small,.activeJob span,.activeJob small,.currentDataScope span,.companyHighlights span,.companyFocusList span,.companyFocusList small,.scopeHint,.companyGlobalDetails summary,.companyGlobalDetails>p,.companySourceLine,.demoHero p,.demoHeroStatus span,.demoStoryline b,.demoVersionName span,.demoVersionAction p,.demoLearning p,.demoScope summary,.demoScope p{color:#4b5563}
+.logo{color:#4f6fe5;background:#eef2ff;border-color:#cdd7ff}
+.version.on{color:#111827;background:#f3f6ff;border-color:#dbe4ff}.version.next,.version.done{color:#4b5563;background:#fafafa}.version b em,.version.on em{color:#3f5fc5;background:#eef2ff}
+.scope,.quick button,.bubble,.composer,.mlCard,.optCard,.designCard,.experimentCard,.metric,.adMain>div,.predictionGrid>div,.feedbackCard,.companyDataCard,.autonomyCard,.roundItem,.datasetLineage>div,.modelCompare>div,.feedbackExperiment,.companyProductList>div,.companyMetricList>div,.activeJob,.currentDataScope,.companyFocusList>div,.companyGlobalDetails,.demoStoryline,.demoVersionRow,.demoLearning,.demoScope{background:#fff;border-color:#e5e7eb}
+.scopeFields input,.feedbackForm select,.feedbackForm input{color:#111827;background:#fff;border-color:#d1d5db}
+.badge{color:#3f5fc5;background:#eef2ff;border-color:#cdd7ff}
+header button{color:#374151;background:#fff;border-color:#d1d5db}header button:hover{background:#f9fafb}
+.quick button{color:#374151}.quick button:hover{background:#f8faff;border-color:#cdd7ff}
+.avatar{color:#3f5fc5;background:#f3f6ff;border-color:#dbe4ff}.msg.user .bubble{background:#f3f6ff;border-color:#dbe4ff}
+.detailBody{border-top-color:#e5e7eb}.detail>button{background:#fafafa}.meta code{color:#3f5fc5;background:#f8fafc;border-color:#e5e7eb}.detailBody p{color:#374151;background:#f8faff;border-left-color:#9fb0ff}
+.chips span,.boPolicy span,.checkpointSteps span{color:#287a6d;background:#f0fdfa;border-color:#ccfbf1}
+.detailBody pre,.designCard pre,.experimentCard pre,.feedbackExperiment pre{color:#1f2937;background:#f8fafc;border:1px solid #e5e7eb}
+.loading{color:#3f5fc5}.error,.feedbackInlineError{color:#b42318;background:#fff5f5;border-color:#fecaca}
+.composer{background:#fff;border-color:#d1d5db;box-shadow:0 1px 2px #0000000d}.composer:focus-within{border-color:#8ea2ff;box-shadow:0 0 0 3px #4f6fe51a}.composer textarea{color:#111827}.composer textarea::placeholder{color:#9ca3af}
+.upload{color:#374151;background:#f9fafb;border-color:#d1d5db}.upload span{background:#eef2f7}
+.attachmentChip{color:#287a6d;background:#f0fdfa;border-color:#ccfbf1}.attachmentChip span{color:#4b776f}.attachmentChip button{color:#6b7280;background:#f3f4f6}.attachmentChip button:hover{color:#111827;background:#e5e7eb}.uploadReady{color:#4b5563}.uploadReady:hover{color:#111827;background:#f8faff;border-color:#cdd7ff}
+.modelStatusBtn,.feedbackStatusBtn{color:#287a6d;background:#f0fdfa;border-color:#a7f3d0}.modelStatusBtn:hover{color:#16695f;background:#ecfdf5;border-color:#6ee7b7}
+.mlCard,.optCard,.feedbackCard,.companyDataCard,.autonomyCard{box-shadow:0 1px 2px #0000000a}.mlCardHead small{color:#6b7280}.statusPill{color:#4b5563;background:#f9fafb;border-color:#e5e7eb}.statusPill.warn{color:#8a6400;background:#fff9e8;border-color:#f7df9a}.statusPill.good{color:#18795d;background:#ecfdf5;border-color:#a7f3d0}.statusPill.bad{color:#b42318;background:#fff5f5;border-color:#fecaca}
+.reasonList{background:#fff7f7;border-left-color:#f4a3a3}.reasonList.warning{background:#fffaf0;border-left-color:#e4bd62}.modelName{color:#3f5fc5}.optSummary,.feedbackHero,.companyDataHero,.autonomyHero,.focusedDataCard{background:linear-gradient(135deg,#f6f8ff,#f0fdfa)}
+.predictionGrid>div,.modelCompare>div,.roundItem,.feedbackExperiment,.companyProductList>div,.companyMetricList>div,.companyFocusList>div,.activeJob{background:#fafafa}.noFeasible{background:#fff7f7;border-color:#fecaca}.noFeasible>b{color:#b42318}.noFeasible p{color:#4b5563}
+.feedbackToolbar button,.feedbackAction,.autonomyToolbar button{color:#3657c9;background:#f3f6ff;border-color:#dbe4ff}.feedbackToolbar button:hover,.feedbackAction:hover,.autonomyToolbar button:hover{color:#2746ad;background:#eef2ff;border-color:#cdd7ff}.feedbackToolbar .approveBtn{color:#3657c9;background:#eef2ff;border-color:#cdd7ff}
+.fixtureFlag,.realDataDisclaimer,.safetyCard,.crashCard,.companyHighlights,.demoBoundary{color:#7a5b13;background:#fffaf0;border-color:#f5deb0}.safetyWarning{color:#b42318;background:#fff5f5;border-left-color:#f4a3a3}.autonomyToolbar .dangerAction{color:#b42318;background:#fff5f5;border-color:#fecaca}
+.datasetLineage b,.feedbackPrediction b,.currentDataScope b,.currentDataScope em{color:#3f5fc5}.datasetLineage>div{background:#f8faff;border-color:#dbe4ff}.feedbackPrediction>span{color:#4b5563;background:#f8faff}.checkpointSteps span{color:#287a6d}.feedbackLiveAnswer,.autonomyLiveAnswer{color:#111827}
+.currentDataScope{background:#f0fdfa;border-color:#ccfbf1}.companyGlobalDetails{background:#fafafa}.companySourceLine{color:#6b7280}
+.demoModeBtn{border-color:#e7c777!important;background:#fff9e8!important;color:#7a5b13!important}.demoModeBtn:hover{background:#fff4ce!important}.demoHero{background:linear-gradient(135deg,#fffaf0,#f0fdfa);border-color:#f5deb0}.demoHero small{color:#7a5b13}.demoStoryline span,.demoLearningFlow span{color:#287a6d;background:#f0fdfa}.demoStoryline i,.demoLearningFlow i{color:#9ca3af}.demoVersionCaps span{color:#287a6d;background:#f0fdfa}.demoVersionAction code,.demoScope code{color:#3f5fc5}.demoBoundary b{color:#7a5b13}.demoBoundary span{color:#6b5b31;border-color:#f5deb0}.send{color:#fff;background:#4f6fe5}.send:not(:disabled):hover{background:#405dc9}

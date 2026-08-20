@@ -53,6 +53,9 @@ class CurrentAttachmentSkill:
                     "page": chunk.get("page"),
                     "paragraph_start": chunk.get("paragraph_start"),
                     "paragraph_end": chunk.get("paragraph_end"),
+                    "sheet_name": chunk.get("sheet_name"),
+                    "row_start": chunk.get("row_start"),
+                    "row_end": chunk.get("row_end"),
                     "chunk_index": chunk.get("index"),
                 }
             )
@@ -138,6 +141,15 @@ class CurrentAttachmentSkill:
 
     @staticmethod
     def _location(chunk: dict) -> str:
+        if chunk.get("sheet_name"):
+            start = chunk.get("row_start")
+            end = chunk.get("row_end")
+            if start:
+                return (
+                    f"工作表 {chunk['sheet_name']} / 行 {start}-{end or start} "
+                    f"/ chunk {chunk.get('index')}"
+                )
+            return f"工作表 {chunk['sheet_name']} / chunk {chunk.get('index')}"
         if chunk.get("page"):
             return f"第 {chunk['page']} 页 / chunk {chunk.get('index')}"
         start = chunk.get("paragraph_start")

@@ -22,7 +22,7 @@ function scopeHeaders(scope){
 }
 
 export async function health(){
-  const r=await fetch("/health");
+  const r=await fetch("/agent-api/health");
   if(!r.ok) throw new Error();
   return r.json();
 }
@@ -30,7 +30,7 @@ export async function health(){
 export async function uploadChatFile(file, scope){
   const form = new FormData();
   form.append("file", file);
-  const r = await fetch("/api/v1/files/chat-upload", {
+  const r = await fetch("/agent-api/api/v1/files/chat-upload", {
     method:"POST",
     headers:scopeHeaders(scope),
     body:form,
@@ -41,7 +41,7 @@ export async function uploadChatFile(file, scope){
 }
 
 export async function deleteChatFile(attachmentId, scope){
-  const r = await fetch(`/api/v1/files/chat-attachments/${attachmentId}`, {
+  const r = await fetch(`/agent-api/api/v1/files/chat-attachments/${attachmentId}`, {
     method:"DELETE",
     headers:scopeHeaders(scope),
   });
@@ -51,7 +51,7 @@ export async function deleteChatFile(attachmentId, scope){
 }
 
 export async function chat(message, history, scope, attachmentIds=[]){
-  const r=await fetch("/api/v1/chat-ui",{
+  const r=await fetch("/agent-api/api/v1/chat-ui",{
     method:"POST",
     headers:{"Content-Type":"application/json",...scopeHeaders(scope)},
     body:JSON.stringify({
@@ -70,7 +70,7 @@ export async function getModelingStatus(projectId, targetMetric, scope){
     project_id:String(projectId),
     target_metric:targetMetric,
   });
-  const r=await fetch(`/api/v1/ml-ui/status?${params.toString()}`,{
+  const r=await fetch(`/agent-api/api/v1/ml-ui/status?${params.toString()}`,{
     headers:scopeHeaders(scope),
   });
   const data=await r.json().catch(()=>null);

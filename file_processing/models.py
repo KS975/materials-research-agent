@@ -11,6 +11,9 @@ class ParsedChunk:
     page: int | None = None
     paragraph_start: int | None = None
     paragraph_end: int | None = None
+    sheet_name: str | None = None
+    row_start: int | None = None
+    row_end: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
