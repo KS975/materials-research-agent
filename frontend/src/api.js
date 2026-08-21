@@ -1,23 +1,44 @@
 const KEY = "materials-agent-dev-scope";
+const DEFAULT_SCOPE = {
+  userId:"local-test",
+  companyId:"6a4b19f62d0e000027001eb8",
+  projectIds:"*",
+};
+const LEGACY_PROJECT_SCOPES = new Set([
+  "115",
+  "115,9010,9018,9026,9036,930066",
+]);
+
+function normalizeProjectScope(value){
+  const raw=String(value??"").trim();
+  const compact=raw.replace(/\s+/g,"");
+  if(!compact || LEGACY_PROJECT_SCOPES.has(compact)) return "*";
+  if(compact.toLowerCase()==="all") return "*";
+  return raw;
+}
 
 export function getScope(){
   try {
-    return {
-      ...{userId:"local-test",companyId:"6a4b19f62d0e000027001eb8",projectIds:"115"},
-      ...JSON.parse(localStorage.getItem(KEY)||"{}")
-    };
+    const stored=JSON.parse(localStorage.getItem(KEY)||"{}");
+    const scope={...DEFAULT_SCOPE,...stored};
+    scope.projectIds=normalizeProjectScope(scope.projectIds);
+    // One-time migration from the old demo whitelist to current-company-all.
+    localStorage.setItem(KEY,JSON.stringify(scope));
+    return scope;
   } catch {
-    return {userId:"local-test",companyId:"6a4b19f62d0e000027001eb8",projectIds:"115"};
+    return {...DEFAULT_SCOPE};
   }
 }
 
-export function saveScope(v){ localStorage.setItem(KEY,JSON.stringify(v)); }
+export function saveScope(v){
+  localStorage.setItem(KEY,JSON.stringify({...v,projectIds:normalizeProjectScope(v?.projectIds)}));
+}
 
 function scopeHeaders(scope){
   return {
     "X-User-Id":scope.userId,
     "X-Company-Id":scope.companyId,
-    "X-Project-Ids":scope.projectIds,
+    "X-Project-Ids":normalizeProjectScope(scope.projectIds),
   };
 }
 

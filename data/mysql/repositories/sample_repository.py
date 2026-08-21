@@ -22,7 +22,7 @@ class SampleRepository:
         self.db = db
 
     def get_by_id(self, sample_id: int, ctx: UserContext) -> dict[str, Any] | None:
-        scope_sql, scope_params = project_scope_clause(ctx.project_ids)
+        scope_sql, scope_params = project_scope_clause(ctx.project_ids, allow_all=ctx.all_projects)
         sql = f"""
             SELECT {_SAMPLE_COLUMNS}
             FROM eln_sample
@@ -35,7 +35,7 @@ class SampleRepository:
         return self.db.query_one(sql, [int(sample_id), ctx.company_id, *scope_params])
 
     def find_exact_name(self, name: str, ctx: UserContext, limit: int = 20) -> list[dict[str, Any]]:
-        scope_sql, scope_params = project_scope_clause(ctx.project_ids)
+        scope_sql, scope_params = project_scope_clause(ctx.project_ids, allow_all=ctx.all_projects)
         lim = bounded_limit(limit)
         sql = f"""
             SELECT {_SAMPLE_COLUMNS}
@@ -50,7 +50,7 @@ class SampleRepository:
         return self.db.query_all(sql, [name, ctx.company_id, *scope_params])
 
     def find(self, keyword: str, ctx: UserContext, limit: int = 20) -> list[dict[str, Any]]:
-        scope_sql, scope_params = project_scope_clause(ctx.project_ids)
+        scope_sql, scope_params = project_scope_clause(ctx.project_ids, allow_all=ctx.all_projects)
         lim = bounded_limit(limit)
         sql = f"""
             SELECT id, name, project_id, company, sample_type, create_time, update_time

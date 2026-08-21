@@ -11,7 +11,7 @@ class ProjectRepository:
         self.db = db
 
     def get_by_id(self, project_id: int | None, ctx: UserContext) -> dict[str, Any] | None:
-        if project_id is None or project_id not in ctx.project_ids:
+        if not ctx.can_access_project(project_id):
             return None
         sql = """
             SELECT

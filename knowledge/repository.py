@@ -21,7 +21,11 @@ class QdrantKnowledgeRepository:
     """Qdrant-backed repository for long-term knowledge chunks.
 
     Permission rule:
-      every vector query MUST include company_id + at least one project_id.
+      every vector query MUST include company_id. Project filtering is either:
+      - one or more explicitly authorized project_ids; or
+      - an explicit all_projects=True grant meaning every project inside that company.
+
+    Omitting project_ids without all_projects=True is fail-closed.
 
     This repository works with both:
       - Qdrant Local Mode (current V0.1.2 development)
@@ -130,23 +134,39 @@ class QdrantKnowledgeRepository:
     def _permission_filter(
         *,
         company_id: str,
-        project_ids: Sequence[int],
+        project_ids: Sequence[int] | None = None,
+        all_projects: bool = False,
     ) -> models.Filter:
         if not company_id:
             raise ValueError("company_id is required")
-        if not project_ids:
-            raise ValueError(
-                "project_ids must contain at least one authorized project"
-            )
 
-        normalized_projects = sorted({int(project_id) for project_id in project_ids})
+        normalized_projects = sorted(
+            {int(project_id) for project_id in (project_ids or ())}
+        )
+
+        company_condition = models.FieldCondition(
+            key="company_id",
+            match=models.MatchValue(value=company_id),
+        )
+
+        if all_projects:
+            if normalized_projects:
+                raise ValueError(
+                    "all_projects=True cannot be combined with project_ids"
+                )
+            # Explicit wildcard means every project inside this company only.
+            # The company predicate is always retained.
+            return models.Filter(must=[company_condition])
+
+        if not normalized_projects:
+            raise ValueError(
+                "project_ids must contain at least one authorized project "
+                "unless all_projects=True"
+            )
 
         return models.Filter(
             must=[
-                models.FieldCondition(
-                    key="company_id",
-                    match=models.MatchValue(value=company_id),
-                ),
+                company_condition,
                 models.FieldCondition(
                     key="project_id",
                     match=models.MatchAny(any=normalized_projects),
@@ -159,7 +179,8 @@ class QdrantKnowledgeRepository:
         *,
         query: str,
         company_id: str,
-        project_ids: Sequence[int],
+        project_ids: Sequence[int] | None = None,
+        all_projects: bool = False,
         limit: int = 5,
         score_threshold: float | None = None,
     ) -> list[KnowledgeSearchHit]:
@@ -172,6 +193,7 @@ class QdrantKnowledgeRepository:
         query_filter = self._permission_filter(
             company_id=company_id,
             project_ids=project_ids,
+            all_projects=all_projects,
         )
         query_vector = self.embedding_provider.embed_query(query)
 

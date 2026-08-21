@@ -72,6 +72,7 @@ class ChatAttachmentStore:
                 "user_id": ctx.user_id,
                 "company_id": ctx.company_id,
                 "project_ids": list(ctx.project_ids),
+                "all_projects": bool(ctx.all_projects),
             },
             "chunks": [chunk.to_dict() for chunk in parsed.chunks],
         }
@@ -94,8 +95,19 @@ class ChatAttachmentStore:
             raise PermissionError("无权访问该 Chat 附件")
 
         original_projects = {int(x) for x in owner.get("project_ids") or []}
+        original_all_projects = bool(owner.get("all_projects", False))
         current_projects = set(ctx.project_ids)
-        if original_projects and not original_projects.issubset(current_projects):
+
+        # A current all-projects grant can access any attachment owned by the
+        # same user/company. Narrower current scope may not open an attachment
+        # that was created under a broader all-projects scope.
+        if original_all_projects and not ctx.all_projects:
+            raise PermissionError("当前项目权限范围不能访问该 Chat 附件")
+        if (
+            not ctx.all_projects
+            and original_projects
+            and not original_projects.issubset(current_projects)
+        ):
             raise PermissionError("当前项目权限范围不能访问该 Chat 附件")
 
         expires_at = datetime.fromisoformat(payload["expires_at"])

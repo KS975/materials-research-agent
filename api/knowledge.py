@@ -15,7 +15,8 @@ router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 
 class KnowledgeSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
-    project_id: int
+    # Optional: omitted means the caller's full authorized project scope.
+    project_id: int | None = None
     limit: int = Field(default=5, ge=1, le=20)
 
 
@@ -98,10 +99,39 @@ def search_knowledge(
     ctx: UserContext = Depends(resolve_user_context),
     container: ApplicationContainer = Depends(get_container),
 ):
-    if not ctx.can_access_project(body.project_id):
+    if body.project_id is not None:
+        if not ctx.can_access_project(body.project_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="当前用户无权检索该项目知识范围",
+            )
+        search_project_ids = [int(body.project_id)]
+        search_all_projects = False
+        scope = {
+            "mode": "explicit_project",
+            "company_id": ctx.company_id,
+            "project_ids": search_project_ids,
+        }
+    elif ctx.all_projects:
+        search_project_ids = []
+        search_all_projects = True
+        scope = {
+            "mode": "company_all_projects",
+            "company_id": ctx.company_id,
+            "project_ids": "*",
+        }
+    elif ctx.project_ids:
+        search_project_ids = sorted({int(item) for item in ctx.project_ids})
+        search_all_projects = False
+        scope = {
+            "mode": "authorized_projects",
+            "company_id": ctx.company_id,
+            "project_ids": search_project_ids,
+        }
+    else:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="当前用户无权检索该项目知识范围",
+            detail="当前用户没有可用于历史知识检索的项目权限",
         )
 
     try:
@@ -109,7 +139,8 @@ def search_knowledge(
             hits = repo.search(
                 query=body.query,
                 company_id=ctx.company_id,
-                project_ids=[body.project_id],
+                project_ids=search_project_ids,
+                all_projects=search_all_projects,
                 limit=body.limit,
             )
     except RuntimeError as exc:
@@ -144,6 +175,7 @@ def search_knowledge(
         "query": body.query,
         "company_id": ctx.company_id,
         "project_id": body.project_id,
+        "retrieval_scope": scope,
         "count": len(items),
         "hits": items,
     }

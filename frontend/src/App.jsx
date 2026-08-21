@@ -720,10 +720,17 @@ export default function App(){
   const history=useMemo(()=>messages.filter(x=>x.id!=="welcome").map(x=>({role:x.role,content:x.content})),[messages]);
   const updateScope=(k,v)=>{const n={...scope,[k]:v};setScope(n);saveScope(n)};
   const currentProjectId=()=>{
-    const raw=String(scope.projectIds||"").split(",").map(x=>x.trim()).find(Boolean);
+    const raw=String(scope.projectIds||"")
+      .split(",")
+      .map(x=>x.trim())
+      .find(x=>/^-?\d+$/.test(x));
+    if(!raw)return null;
     const value=Number(raw);
-    return Number.isInteger(value)&&value>0?value:null;
+    return Number.isInteger(value)?value:null;
   };
+  const projectScopeLabel=String(scope.projectIds||"").trim()==="*"
+    ? "当前公司全部项目"
+    : `Project ${scope.projectIds}`;
 
   function appendUiFailure(label,error){
     const message=String(error?.message||error||"未知错误");
@@ -849,7 +856,7 @@ export default function App(){
       <label className="section">能力版本</label>
       {versions.map(v=><div className={`version ${v[3]}`} key={v[0]}><div className="dot">{v[3]==="on"?"●":v[3]==="done"?"✓":"○"}</div><div><b>{v[0]} {v[3]==="on"&&<em>当前</em>}{v[3]==="done"&&<em>已通过</em>}</b><strong>{v[1]}</strong><span>{v[2]}</span></div></div>)}
       <div className="spacer"/>
-      <div className="scope"><button onClick={()=>setShowScope(!showScope)}><span>开发权限范围<br/><b>Project {scope.projectIds}</b></span><i>{showScope?"⌃":"⌄"}</i></button>{showScope&&<div className="scopeFields"><label>User ID<input value={scope.userId} onChange={e=>updateScope("userId",e.target.value)}/></label><label>Company ID<input value={scope.companyId} onChange={e=>updateScope("companyId",e.target.value)}/></label><label>Project IDs<input value={scope.projectIds} onChange={e=>updateScope("projectIds",e.target.value)}/></label><p>仅用于 development_header，正式版替换为平台登录态。</p></div>}</div>
+      <div className="scope"><button onClick={()=>setShowScope(!showScope)}><span>开发权限范围<br/><b>{projectScopeLabel}</b></span><i>{showScope?"⌃":"⌄"}</i></button>{showScope&&<div className="scopeFields"><label>User ID<input value={scope.userId} onChange={e=>updateScope("userId",e.target.value)}/></label><label>Company ID<input value={scope.companyId} onChange={e=>updateScope("companyId",e.target.value)}/></label><label>Project IDs<input value={scope.projectIds} placeholder="* = 当前公司全部项目" onChange={e=>updateScope("projectIds",e.target.value)}/></label><p>“*”仅表示当前 Company 下全部 Project；跨公司访问仍被禁止。仅用于 development_header，正式版替换为平台登录态。</p></div>}</div>
       <div className="status"><i className={online?"ok":"bad"}/><span>{online===null?"检查后端中":online?"后端已连接":"后端未连接"}</span></div>
     </aside>
 

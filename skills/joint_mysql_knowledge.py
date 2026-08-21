@@ -11,12 +11,15 @@ from skills.analysis import AnalysisSkill
 
 
 class JointMySQLKnowledgeAnalysisSkill:
-    """V0.1.2 T07: combine read-only MySQL facts with historical Qdrant evidence.
+    """Combine read-only MySQL facts with historical Qdrant evidence.
 
     Safety boundaries:
     - MySQL access still goes through the existing Tool -> Repository path.
-    - The DB context is narrowed to exactly one authorized project.
-    - Qdrant retrieval is filtered by the same company + project.
+    - company_id is always enforced by the business repositories and Qdrant.
+    - If the user explicitly specifies a project, both MySQL and Qdrant are
+      narrowed to that project.
+    - If no project is specified, both sources use the caller's authorized
+      scope; all company projects are only allowed when ctx.all_projects=True.
     - Historical similarity is evidence, not proof of identical causality.
     - This skill does not read current Chat temporary attachments.
     """
@@ -46,22 +49,15 @@ class JointMySQLKnowledgeAnalysisSkill:
         self,
         *,
         message: str,
-        project_id: int,
+        project_id: int | None,
         left_identifier: str | int,
         right_identifier: str | int,
         target_metric: str,
         direction_claim: str,
         ctx: UserContext,
     ) -> dict[str, Any]:
-        if not ctx.can_access_project(project_id):
-            raise PermissionError("当前用户无权进行该项目的联合分析")
-
-        # Narrow both sample lookups to exactly the same project used by Qdrant.
-        scoped_ctx = UserContext(
-            user_id=ctx.user_id,
-            company_id=ctx.company_id,
-            project_ids=(project_id,),
-            permission_source=ctx.permission_source,
+        db_ctx, knowledge_project_ids, knowledge_all_projects, scope = (
+            self._resolve_analysis_scope(ctx=ctx, project_id=project_id)
         )
 
         database_result = self.analysis_skill.execute(
@@ -72,7 +68,7 @@ class JointMySQLKnowledgeAnalysisSkill:
                 "target_metric": target_metric,
                 "direction": direction_claim,
             },
-            scoped_ctx,
+            db_ctx,
         )
 
         if not isinstance(database_result, dict) or database_result.get("status") != "ok":
@@ -80,6 +76,7 @@ class JointMySQLKnowledgeAnalysisSkill:
                 "status": "database_error",
                 "answer": self._database_error_answer(database_result),
                 "project_id": project_id,
+                "analysis_scope": scope,
                 "database_result": database_result,
                 "knowledge_hits": [],
                 "evidence": self._mysql_evidence(database_result),
@@ -94,12 +91,23 @@ class JointMySQLKnowledgeAnalysisSkill:
         left_sample = facts.get("left_sample") or {}
         right_sample = facts.get("right_sample") or {}
 
-        # Defense in depth: even after a project-scoped Repository lookup, verify
-        # both returned samples belong to the joint-analysis project.
+        # Defense in depth. Repositories already enforce company + project
+        # permissions, but joint analysis verifies returned project membership
+        # again before combining it with historical evidence.
         for sample in (left_sample, right_sample):
-            if int(sample.get("project_id") or -1) != int(project_id):
+            raw_project = sample.get("project_id")
+            if raw_project is None:
                 raise PermissionError(
-                    "联合分析发现样品项目与历史知识检索项目不一致，已拒绝继续分析"
+                    "联合分析返回的样品缺少 project_id，已拒绝继续历史资料检索"
+                )
+            sample_project = int(raw_project)
+            if not ctx.can_access_project(sample_project):
+                raise PermissionError(
+                    "联合分析发现样品超出当前项目权限范围，已拒绝继续分析"
+                )
+            if project_id is not None and sample_project != int(project_id):
+                raise PermissionError(
+                    "联合分析发现样品项目与指定历史知识检索项目不一致，已拒绝继续分析"
                 )
 
         knowledge_query = self._knowledge_query(
@@ -112,7 +120,8 @@ class JointMySQLKnowledgeAnalysisSkill:
             hits = repo.search(
                 query=knowledge_query,
                 company_id=ctx.company_id,
-                project_ids=[project_id],
+                project_ids=knowledge_project_ids,
+                all_projects=knowledge_all_projects,
                 limit=self.max_hits,
                 score_threshold=self.score_threshold,
             )
@@ -167,14 +176,15 @@ class JointMySQLKnowledgeAnalysisSkill:
         mysql_evidence = self._mysql_evidence(database_result)
         combined_evidence = [*mysql_evidence, *knowledge_evidence]
 
-        system = """你是“材数智能体”V0.1.2 T07 联合分析器。
+        system = """你是“材数智能体”V0.1.2 联合分析器。
 你将同时收到：
 A. MYSQL FACTS：通过既有只读 Tool/Repository 从业务 MySQL 获取的结构化事实；
-B. HISTORICAL KNOWLEDGE：当前公司、同一项目权限范围内从 Qdrant 检索出的历史资料。
+B. HISTORICAL KNOWLEDGE：从当前公司、当前用户授权范围内的 Qdrant 历史资料中检索出的证据。
 
 必须遵守：
 1. 先写【数据库事实】，只陈述 MYSQL FACTS 中明确存在的信息。
 2. 再写【历史资料】，只陈述 HISTORICAL KNOWLEDGE 中明确存在的信息。
+   历史资料可能来自当前公司的不同项目，必须保留每条来源自己的 project_id，不能把不同项目合并成同一次实验。
 3. 再写【联合判断】。可以指出当前数据库事实与历史记录的相似点/差异点，
    但“历史相似”绝不等于“原因相同”，不得把相关性写成因果。
 4. 再写【假设】。假设只能标注为需要验证的工程假设，不得伪装成数据库事实。
@@ -186,7 +196,7 @@ B. HISTORICAL KNOWLEDGE：当前公司、同一项目权限范围内从 Qdrant �
    不能写成“历史上不存在”。
 8. 不得补全来源中不存在的数值、单位、测试条件、原料批次或实验结论。
 9. 不得复述密码、API Key、Token；[REDACTED] 必须保持为 [REDACTED]。
-10. 最后给出【证据来源】，分别标识 MySQL 记录来源与历史文件来源。
+10. 最后给出【证据来源】，分别标识 MySQL 记录来源与历史文件来源；历史文件来源要写 project_id。
 回答中文，结构清楚、保守、可审计。
 """
 
@@ -203,7 +213,7 @@ B. HISTORICAL KNOWLEDGE：当前公司、同一项目权限范围内从 Qdrant �
 
         user = (
             f"用户问题：{message}\n"
-            f"联合分析项目：{project_id}\n"
+            f"联合分析范围：{scope['display_name']}\n"
             f"历史检索查询：{knowledge_query}\n\n"
             f"MYSQL FACTS:\n{mysql_payload}\n\n"
             f"HISTORICAL KNOWLEDGE:\n{history_payload}"
@@ -222,6 +232,7 @@ B. HISTORICAL KNOWLEDGE：当前公司、同一项目权限范围内从 Qdrant �
             "status": "ok",
             "analysis_type": "joint_mysql_historical_knowledge",
             "project_id": project_id,
+            "analysis_scope": scope,
             "database_result": database_result,
             "knowledge_query": knowledge_query,
             "knowledge_hit_count": len(hits),
@@ -231,6 +242,65 @@ B. HISTORICAL KNOWLEDGE：当前公司、同一项目权限范围内从 Qdrant �
             "evidence": combined_evidence,
             "warnings": warnings,
         }
+
+    @staticmethod
+    def _resolve_analysis_scope(
+        *,
+        ctx: UserContext,
+        project_id: int | None,
+    ) -> tuple[UserContext, list[int], bool, dict[str, Any]]:
+        if project_id is not None:
+            project_id = int(project_id)
+            if not ctx.can_access_project(project_id):
+                raise PermissionError("当前用户无权进行该项目的联合分析")
+
+            scoped_ctx = UserContext(
+                user_id=ctx.user_id,
+                company_id=ctx.company_id,
+                project_ids=(project_id,),
+                permission_source=ctx.permission_source,
+                all_projects=False,
+            )
+            return (
+                scoped_ctx,
+                [project_id],
+                False,
+                {
+                    "mode": "explicit_project",
+                    "company_id": ctx.company_id,
+                    "project_ids": [project_id],
+                    "display_name": f"当前公司 Project {project_id}",
+                },
+            )
+
+        if ctx.all_projects:
+            return (
+                ctx,
+                [],
+                True,
+                {
+                    "mode": "company_all_projects",
+                    "company_id": ctx.company_id,
+                    "project_ids": "*",
+                    "display_name": "当前公司全部项目",
+                },
+            )
+
+        if ctx.project_ids:
+            project_ids = sorted({int(item) for item in ctx.project_ids})
+            return (
+                ctx,
+                project_ids,
+                False,
+                {
+                    "mode": "authorized_projects",
+                    "company_id": ctx.company_id,
+                    "project_ids": project_ids,
+                    "display_name": "当前用户已授权项目范围",
+                },
+            )
+
+        raise PermissionError("当前用户没有可用于联合分析的项目权限")
 
     @staticmethod
     def _knowledge_query(
@@ -283,9 +353,9 @@ B. HISTORICAL KNOWLEDGE：当前公司、同一项目权限范围内从 Qdrant �
             )
 
         if status == "left_error":
-            return "左侧样品无法在当前项目权限范围内确定，未继续联合分析。"
+            return "左侧样品无法在当前授权范围内确定，未继续联合分析。"
         if status == "right_error":
-            return "右侧样品无法在当前项目权限范围内确定，未继续联合分析。"
+            return "右侧样品无法在当前授权范围内确定，未继续联合分析。"
 
         return f"数据库证据获取失败（status={status}），未继续联合分析。"
 

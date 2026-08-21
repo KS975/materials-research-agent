@@ -198,3 +198,60 @@ def test_upsert_is_idempotent_for_same_chunk(tmp_path: Path):
         repo.upsert_chunks([chunk])
 
         assert repo.count() == 1
+
+
+def test_company_all_projects_search_keeps_company_boundary(tmp_path: Path):
+    provider = HashEmbeddingProvider(dimension=64)
+    path = tmp_path / "qdrant"
+
+    docs = [
+        _document(
+            document_id="a-115",
+            company_id="company-a",
+            project_id=115,
+            filename="a115.docx",
+            text="跨项目相似问题",
+        ),
+        _document(
+            document_id="a-120",
+            company_id="company-a",
+            project_id=120,
+            filename="a120.docx",
+            text="跨项目相似问题",
+        ),
+        _document(
+            document_id="b-999",
+            company_id="company-b",
+            project_id=999,
+            filename="b999.docx",
+            text="跨项目相似问题",
+        ),
+    ]
+
+    with QdrantKnowledgeRepository.local(
+        path=path,
+        embedding_provider=provider,
+        collection_name="company_all_projects_test",
+    ) as repo:
+        repo.upsert_chunks(
+            [_chunk(doc, chunk_index=0, text="跨项目相似问题") for doc in docs]
+        )
+
+        hits = repo.search(
+            query="跨项目相似问题",
+            company_id="company-a",
+            project_ids=[],
+            all_projects=True,
+            limit=10,
+        )
+
+        assert {hit.chunk.project_id for hit in hits} == {115, 120}
+        assert {hit.chunk.company_id for hit in hits} == {"company-a"}
+
+        with pytest.raises(ValueError):
+            repo.search(
+                query="跨项目相似问题",
+                company_id="company-a",
+                project_ids=[115],
+                all_projects=True,
+            )

@@ -5,11 +5,22 @@ from fastapi import HTTPException, Request, status
 from schemas.user_context import UserContext
 
 
+_ALL_PROJECT_TOKENS = {"*", "all"}
+
+
 class DevelopmentHeaderPermissionAdapter:
     """Temporary local integration adapter.
 
     This is NOT the production MatCloud permission implementation.
-    It requires explicit company and project scope on every request.
+
+    Every request must still provide an explicit user and company. Project
+    scope can be either:
+    - a comma-separated list of integer project IDs; or
+    - ``*`` / ``all`` meaning every project that belongs to the supplied
+      company.
+
+    The wildcard never grants cross-company access. Repository queries keep
+    the company predicate and the business DB remains read-only.
     """
 
     def resolve(self, request: Request) -> UserContext:
@@ -26,6 +37,15 @@ class DevelopmentHeaderPermissionAdapter:
                 ),
             )
 
+        if raw_projects.lower() in _ALL_PROJECT_TOKENS:
+            return UserContext(
+                user_id=user_id,
+                company_id=company_id,
+                project_ids=(),
+                permission_source="development_header",
+                all_projects=True,
+            )
+
         try:
             project_ids = tuple(
                 sorted({int(item.strip()) for item in raw_projects.split(",") if item.strip()})
@@ -33,7 +53,7 @@ class DevelopmentHeaderPermissionAdapter:
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="X-Project-Ids 必须是逗号分隔的整数",
+                detail="X-Project-Ids 必须是逗号分隔的整数，或使用 * 表示当前公司全部项目",
             ) from exc
 
         if not project_ids:

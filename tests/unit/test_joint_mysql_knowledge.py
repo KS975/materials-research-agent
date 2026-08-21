@@ -9,18 +9,36 @@ from skills.joint_mysql_knowledge import JointMySQLKnowledgeAnalysisSkill
 
 
 class FakeRegistry:
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        expected_projects=(115,),
+        expected_all_projects=False,
+        sample_projects=(115, 115),
+    ):
         self.calls = []
+        self.expected_projects = expected_projects
+        self.expected_all_projects = expected_all_projects
+        self.sample_projects = sample_projects
 
     def execute(self, name, **kwargs):
         self.calls.append((name, kwargs))
         assert name == "compare_samples"
         ctx = kwargs["ctx"]
-        assert ctx.project_ids == (115,)
+        assert ctx.project_ids == self.expected_projects
+        assert ctx.all_projects is self.expected_all_projects
         return {
             "status": "ok",
-            "left_sample": {"id": 3811, "name": "trial_6", "project_id": 115},
-            "right_sample": {"id": 3809, "name": "trial_4", "project_id": 115},
+            "left_sample": {
+                "id": 3811,
+                "name": "trial_6",
+                "project_id": self.sample_projects[0],
+            },
+            "right_sample": {
+                "id": 3809,
+                "name": "trial_4",
+                "project_id": self.sample_projects[1],
+            },
             "formula_diff": {
                 "changed": [{"field": "ABS", "left": 18.49, "right": 33.24, "unit": "%"}],
                 "same": [],
@@ -77,12 +95,13 @@ class FakeLLM:
         )
 
 
-def _ctx(projects=(115,)):
+def _ctx(projects=(115,), *, all_projects=False):
     return UserContext(
         user_id="local-test",
         company_id="company-a",
         project_ids=projects,
         permission_source="development_header",
+        all_projects=all_projects,
     )
 
 
@@ -207,3 +226,70 @@ def test_t07_rejects_unauthorized_project_before_mysql_or_qdrant():
     assert registry.calls == []
     assert repo.calls == []
     assert llm.calls == []
+
+
+def test_t07_without_project_uses_company_all_projects_for_mysql_and_history():
+    registry = FakeRegistry(
+        expected_projects=(),
+        expected_all_projects=True,
+        sample_projects=(115, 120),
+    )
+    repo = FakeRepo([_history_hit()])
+    llm = FakeLLM()
+
+    @contextmanager
+    def open_repo():
+        yield repo
+
+    skill = JointMySQLKnowledgeAnalysisSkill(registry, open_repo, llm)
+    result = skill.answer(
+        message="3811 的冲击强度比 3809 低很多，历史上有没有类似问题？结合数据库和历史资料分析。",
+        project_id=None,
+        left_identifier=3811,
+        right_identifier=3809,
+        target_metric="冲击强度",
+        direction_claim="更低",
+        ctx=_ctx(projects=(), all_projects=True),
+    )
+
+    assert result["status"] == "ok"
+    assert result["project_id"] is None
+    assert result["analysis_scope"]["mode"] == "company_all_projects"
+    assert result["analysis_scope"]["project_ids"] == "*"
+
+    call = repo.calls[0]
+    assert call["company_id"] == "company-a"
+    assert call["project_ids"] == []
+    assert call["all_projects"] is True
+    assert "当前公司全部项目" in llm.calls[0][1]
+
+
+def test_t07_without_project_uses_authorized_project_list_when_not_wildcard():
+    registry = FakeRegistry(
+        expected_projects=(115, 120),
+        expected_all_projects=False,
+        sample_projects=(115, 120),
+    )
+    repo = FakeRepo([_history_hit()])
+    llm = FakeLLM()
+
+    @contextmanager
+    def open_repo():
+        yield repo
+
+    skill = JointMySQLKnowledgeAnalysisSkill(registry, open_repo, llm)
+    result = skill.answer(
+        message="结合历史资料比较 3811 和 3809 的冲击强度。",
+        project_id=None,
+        left_identifier=3811,
+        right_identifier=3809,
+        target_metric="冲击强度",
+        direction_claim="更低",
+        ctx=_ctx(projects=(115, 120)),
+    )
+
+    assert result["analysis_scope"]["mode"] == "authorized_projects"
+    assert result["analysis_scope"]["project_ids"] == [115, 120]
+    call = repo.calls[0]
+    assert call["project_ids"] == [115, 120]
+    assert call["all_projects"] is False

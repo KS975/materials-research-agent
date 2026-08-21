@@ -28,20 +28,21 @@ class FakeRepo:
         return self.hits
 
 
-def _ctx(projects=(115,)):
+def _ctx(projects=(115,), *, all_projects=False):
     return UserContext(
         user_id="local-test",
         company_id="company-a",
         project_ids=projects,
         permission_source="development_header",
+        all_projects=all_projects,
     )
 
 
-def _hit(score=0.71):
+def _hit(score=0.71, *, project_id=115):
     chunk = KnowledgeChunk(
         document_id="doc-001",
         company_id="company-a",
-        project_id=115,
+        project_id=project_id,
         filename="历史异常报告.docx",
         source_type="manual_index",
         source_id="manual:001",
@@ -135,3 +136,53 @@ def test_historical_rag_rejects_unauthorized_project_before_search():
 
     assert repo.calls == []
     assert llm.calls == []
+
+
+def test_historical_rag_without_project_searches_current_company_all_projects():
+    repo = FakeRepo([_hit(project_id=120)])
+    llm = FakeLLM()
+
+    @contextmanager
+    def open_repo():
+        yield repo
+
+    skill = HistoricalKnowledgeRAGSkill(open_repo, llm)
+    result = skill.answer(
+        message="历史上有没有类似的冲击强度下降问题？",
+        project_id=None,
+        ctx=_ctx(projects=(), all_projects=True),
+    )
+
+    assert result["status"] == "ok"
+    assert result["project_id"] is None
+    assert result["retrieval_scope"]["mode"] == "company_all_projects"
+    assert result["retrieval_scope"]["project_ids"] == "*"
+    assert result["evidence"][0]["project_id"] == 120
+
+    call = repo.calls[0]
+    assert call["company_id"] == "company-a"
+    assert call["project_ids"] == []
+    assert call["all_projects"] is True
+    assert "当前公司全部项目" in llm.calls[0][1]
+
+
+def test_historical_rag_without_project_uses_all_authorized_projects_when_not_wildcard():
+    repo = FakeRepo([_hit(project_id=120)])
+    llm = FakeLLM()
+
+    @contextmanager
+    def open_repo():
+        yield repo
+
+    skill = HistoricalKnowledgeRAGSkill(open_repo, llm)
+    result = skill.answer(
+        message="历史资料里有没有类似问题？",
+        project_id=None,
+        ctx=_ctx(projects=(115, 120)),
+    )
+
+    assert result["retrieval_scope"]["mode"] == "authorized_projects"
+    assert result["retrieval_scope"]["project_ids"] == [115, 120]
+    call = repo.calls[0]
+    assert call["project_ids"] == [115, 120]
+    assert call["all_projects"] is False

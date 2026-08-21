@@ -104,33 +104,31 @@ def _looks_like_historical_knowledge(message: str) -> bool:
 def _resolve_historical_project_id(
     tool_args: dict[str, Any],
     ctx: UserContext,
-) -> int:
+) -> int | None:
+    """Resolve an optional explicit project restriction.
+
+    No project in the user request no longer means an error. The downstream
+    RAG skill will search the caller's full authorized scope:
+    - current-company all projects when ctx.all_projects=True; or
+    - every project listed in ctx.project_ids otherwise.
+    """
     raw = tool_args.get("project_id")
-    if raw is not None:
-        try:
-            project_id = int(raw)
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="历史知识检索的 project_id 必须是整数",
-            ) from exc
-        if not ctx.can_access_project(project_id):
-            raise HTTPException(
-                status_code=403,
-                detail="当前用户无权检索该项目历史知识",
-            )
-        return project_id
+    if raw is None or str(raw).strip() == "":
+        return None
 
-    if len(ctx.project_ids) == 1:
-        return int(ctx.project_ids[0])
-
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "当前用户同时拥有多个项目权限，请在问题中明确项目号，"
-            "例如“项目115历史上有没有类似问题？”"
-        ),
-    )
+    try:
+        project_id = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="历史知识检索的 project_id 必须是整数",
+        ) from exc
+    if not ctx.can_access_project(project_id):
+        raise HTTPException(
+            status_code=403,
+            detail="当前用户无权检索该项目历史知识",
+        )
+    return project_id
 
 
 def _resolve_joint_args(
