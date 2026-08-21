@@ -12,6 +12,13 @@ from schemas.user_context import UserContext
 class CurrentAttachmentSkill:
     """Analyze current-chat attachments without creating a long-term index."""
 
+    # Broad XLSX summaries need full-sheet coverage. The previous fixed 12-chunk
+    # limit could silently omit the tail of a wide spreadsheet (for example,
+    # rows 81-95 in a 13-chunk workbook). Keep an explicit context budget
+    # instead of a hard first-N cutoff.
+    XLSX_GENERIC_MAX_CHUNKS = 40
+    XLSX_GENERIC_MAX_CHARS = 60000
+
     def __init__(self, store: ChatAttachmentStore, llm: LLMProvider):
         self.store = store
         self.llm = llm
@@ -68,7 +75,9 @@ class CurrentAttachmentSkill:
 3. 不得把猜测写成文件事实。
 4. 如果用户要求“分析/总结这份报告”，按报告真实内容提炼：目的/对象、方法或工艺、测试或结果、结论/问题；某项没有就省略或说明未找到。
 5. 数值、单位、样品名、条件必须保持来源原文语义。
-6. 末尾给出【附件依据】，使用 SOURCE 编号说明依据来自哪些文件/页或段落。
+6. 末尾给出【附件依据】，使用 SOURCE 编号说明依据来自哪些文件/页、段落或 Excel 行范围。
+7. 对 XLSX 的“分析/总结/概括”类问题，必须覆盖所有已提供 SOURCE，不得只总结前半部分；优先依据“工作表元数据”报告准确的最大行、最大列和解析覆盖范围。若第 1 行明显是表头，可把数据行数表述为“总行数减表头行”，但不要凭空估算。
+8. 对 Excel 中百分比配方、重复材料名或疑似异常字段，只能基于原始单元格做数据质量提示；不得自行改正。百分比直接相加不等于 100% 时，应提示“可能存在不同计量基准或原始记录需核实”。
 回答中文。
 """
         user = (
@@ -92,7 +101,7 @@ class CurrentAttachmentSkill:
                 for x in attachments
             ],
             "evidence": evidence,
-            "warnings": [],
+            "warnings": self._coverage_warnings(selected, attachments, message),
         }
 
     def _select_chunks(self, message: str, attachments: list, limit: int) -> list[dict[str, Any]]:
@@ -125,12 +134,72 @@ class CurrentAttachmentSkill:
             )
         )
         if generic_analysis:
-            # Broad summary should cover the beginning and additional ranked chunks.
-            chosen = candidates[:limit]
-        else:
-            positive = [x for x in candidates if x["score"] > 0]
-            chosen = (positive or candidates)[:limit]
-        return chosen
+            # Spreadsheet summaries are different from retrieval questions: a
+            # fixed first-N cut can hide late experiment rows. For XLSX, keep
+            # document order and include the whole workbook while it fits a
+            # bounded context budget. Other document types keep the historical
+            # retrieval limit.
+            xlsx_candidates = [
+                item for item in candidates if item["attachment"].parser == "openpyxl"
+            ]
+            if xlsx_candidates:
+                xlsx_candidates.sort(
+                    key=lambda x: (
+                        x["attachment"].filename,
+                        int(x["chunk"].get("index") or 0),
+                    )
+                )
+                chosen: list[dict[str, Any]] = []
+                char_total = 0
+                for item in xlsx_candidates:
+                    chunk_chars = len(str(item["chunk"].get("text") or ""))
+                    if chosen and (
+                        len(chosen) >= self.XLSX_GENERIC_MAX_CHUNKS
+                        or char_total + chunk_chars > self.XLSX_GENERIC_MAX_CHARS
+                    ):
+                        break
+                    chosen.append(item)
+                    char_total += chunk_chars
+                return chosen
+
+            # Broad PDF/DOCX summary keeps the existing bounded behavior.
+            return candidates[:limit]
+
+        positive = [x for x in candidates if x["score"] > 0]
+        return (positive or candidates)[:limit]
+
+    def _coverage_warnings(
+        self,
+        selected: list[dict[str, Any]],
+        attachments: list,
+        message: str,
+    ) -> list[str]:
+        generic_analysis = any(
+            word in message
+            for word in ("分析", "总结", "概括", "这份报告", "这个文件", "附件", "文档")
+        )
+        if not generic_analysis:
+            return []
+
+        selected_by_attachment: dict[str, set[int]] = {}
+        for item in selected:
+            attachment = item["attachment"]
+            selected_by_attachment.setdefault(attachment.attachment_id, set()).add(
+                int(item["chunk"].get("index") or 0)
+            )
+
+        warnings: list[str] = []
+        for attachment in attachments:
+            if attachment.parser != "openpyxl":
+                continue
+            selected_count = len(selected_by_attachment.get(attachment.attachment_id, set()))
+            if selected_count < attachment.chunk_count:
+                warnings.append(
+                    f"XLSX 宽表摘要受上下文预算限制：{attachment.filename} "
+                    f"已覆盖 {selected_count}/{attachment.chunk_count} 个数据块；"
+                    "建议针对未覆盖行范围继续追问。"
+                )
+        return warnings
 
     @staticmethod
     def _terms(text: str) -> set[str]:

@@ -68,3 +68,59 @@ def test_parse_xlsx_preserves_sheet_rows_and_values():
 def test_xls_remains_explicitly_unsupported():
     with pytest.raises(UnsupportedFileTypeError, match="PDF、DOCX 和 XLSX"):
         ChatFileParser().parse_bytes("legacy.xls", b"not-an-xls")
+
+
+def test_parse_xlsx_reports_exact_sheet_metadata():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "工艺"
+    # Simulate a wide/long sheet shape without making a huge fixture.
+    for col in range(1, 72):
+        ws.cell(row=1, column=col, value=f"字段{col}")
+    for row in range(2, 96):
+        ws.cell(row=row, column=1, value=f"S{row:03d}")
+        ws.cell(row=row, column=2, value=row)
+    buf = BytesIO()
+    wb.save(buf)
+
+    parsed = ChatFileParser(chunk_chars=1400).parse_bytes("工艺.xlsx", buf.getvalue())
+
+    assert parsed.parser == "openpyxl"
+    assert "原始最大行=95" in parsed.text
+    assert "原始最大列=71" in parsed.text
+    assert "非空行=95" in parsed.text
+    assert parsed.chunks[-1].row_end == 95
+    assert "原始最大行=95" in parsed.chunks[-1].text
+
+
+def test_generic_xlsx_summary_selects_tail_chunks():
+    from types import SimpleNamespace
+
+    from skills.current_attachment import CurrentAttachmentSkill
+
+    chunks = tuple(
+        {
+            "index": index,
+            "text": f"[工作表] 工艺；[行范围] {index * 10 + 1}-{index * 10 + 10}\n内容{index}",
+            "sheet_name": "工艺",
+            "row_start": index * 10 + 1,
+            "row_end": index * 10 + 10,
+        }
+        for index in range(13)
+    )
+    attachment = SimpleNamespace(
+        attachment_id="xlsx-1",
+        filename="工艺.xlsx",
+        parser="openpyxl",
+        chunks=chunks,
+        chunk_count=len(chunks),
+    )
+    skill = CurrentAttachmentSkill(store=None, llm=None)  # type: ignore[arg-type]
+
+    selected = skill._select_chunks("请分析总结这个附件", [attachment], limit=12)
+
+    assert len(selected) == 13
+    assert selected[-1]["chunk"]["index"] == 12
+    assert skill._coverage_warnings(selected, [attachment], "请分析总结这个附件") == []

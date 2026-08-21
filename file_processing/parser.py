@@ -192,6 +192,17 @@ class UnifiedFileParser:
                 if not rows:
                     continue
 
+                original_max_row = int(worksheet.max_row or 0)
+                original_max_column = int(worksheet.max_column or 0)
+                parsed_max_row = min(original_max_row, self.XLSX_MAX_ROWS_PER_SHEET)
+                parsed_max_column = min(original_max_column, self.XLSX_MAX_COLUMNS)
+                sheet_metadata = (
+                    f"[工作表元数据] 名称={worksheet.title}；"
+                    f"原始最大行={original_max_row}；原始最大列={original_max_column}；"
+                    f"已解析最大行={parsed_max_row}；已解析最大列={parsed_max_column}；"
+                    f"非空行={len(rows)}"
+                )
+
                 truncation_notes: list[str] = []
                 if int(worksheet.max_row or 0) > self.XLSX_MAX_ROWS_PER_SHEET:
                     truncation_notes.append(
@@ -202,7 +213,7 @@ class UnifiedFileParser:
                         f"仅解析前 {self.XLSX_MAX_COLUMNS} 列"
                     )
 
-                section_lines = [f"[工作表] {worksheet.title}"]
+                section_lines = [f"[工作表] {worksheet.title}", sheet_metadata]
                 section_lines.extend(f"[行 {row_no}] {line}" for row_no, line in rows)
                 if truncation_notes:
                     section_lines.append("[解析提示] " + "；".join(truncation_notes))
@@ -212,6 +223,7 @@ class UnifiedFileParser:
                     worksheet.title,
                     rows,
                     truncation_notes,
+                    sheet_metadata,
                 ):
                     chunks.append(
                         ParsedChunk(
@@ -250,6 +262,7 @@ class UnifiedFileParser:
         sheet_name: str,
         rows: list[tuple[int, str]],
         truncation_notes: list[str],
+        sheet_metadata: str,
     ) -> list[tuple[str, int, int]]:
         result: list[tuple[str, int, int]] = []
         buffer: list[tuple[int, str]] = []
@@ -261,7 +274,10 @@ class UnifiedFileParser:
                 return
             row_start = buffer[0][0]
             row_end = buffer[-1][0]
-            header = f"[工作表] {sheet_name}；[行范围] {row_start}-{row_end}"
+            header = (
+                f"[工作表] {sheet_name}；[行范围] {row_start}-{row_end}\n"
+                f"{sheet_metadata}"
+            )
             body = "\n".join(f"[行 {row_no}] {line}" for row_no, line in buffer)
             note = ""
             if truncation_notes:
