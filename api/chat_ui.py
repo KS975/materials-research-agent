@@ -29,6 +29,7 @@ from runtime.company_data_inspection import (
 )
 from runtime.company_data_conversation import (
     classify_company_data_turn,
+    company_data_has_priority,
 )
 
 from runtime.v014_ui import (
@@ -44,7 +45,11 @@ from runtime.v014_ui import (
 router = APIRouter(prefix="/api/v1", tags=["chat-ui"])
 
 
-_ROUND2A2_DATABASE_INTENTS = {
+_ROUND2A_DATABASE_INTENTS = {
+    "sample_full_profile",
+    "formula_difference",
+    "process_difference",
+    "comparability_check",
     "performance_rank",
     "experiment_series_analysis",
     "data_quality_check",
@@ -53,8 +58,14 @@ _ROUND2A2_DATABASE_INTENTS = {
 _EXPLICIT_COMPANY_DATA_MARKERS = (
     "单位真实数据",
     "公司真实数据",
+    "真实数据",
+    "真实样本",
+    "真实样品",
+    "单位数据",
+    "公司数据",
     "海科数据",
     "海科总库",
+    "总库",
     "导入的真实数据",
 )
 
@@ -83,20 +94,27 @@ class ChatUIResponse(BaseModel):
     routing: dict[str, Any] = Field(default_factory=dict)
 
 
-def _route_round2a2_database_intent(message: str, rule_router):
-    """Reserve explicit Round 2A-2 R&D questions for business MySQL.
+def _route_round2a2_database_intent(
+    message: str,
+    rule_router,
+    history: list[dict[str, str]] | None = None,
+):
+    """Reserve explicit Round 2A R&D questions for business MySQL.
 
     The imported company-data runtime remains available only when the current
-    turn explicitly names that source. This function is intentionally narrow:
-    it does not make generic sample lookup/comparison bypass other routers.
+    turn explicitly names that source. Pair follow-ups are resolved from user
+    history before the low-priority imported-data overview classifier.
     """
     text = str(message or "").strip()
     if any(marker in text for marker in _EXPLICIT_COMPANY_DATA_MARKERS):
         return None
     decision = rule_router.route(text)
-    if decision is None or decision.intent not in _ROUND2A2_DATABASE_INTENTS:
-        return None
-    return decision
+    if decision is not None and decision.intent in _ROUND2A_DATABASE_INTENTS:
+        return decision
+    return DeepSeekIntentRouter.deterministic_material_followup_decision(
+        text,
+        history or [],
+    )
 
 
 def _looks_like_joint_mysql_knowledge(message: str) -> bool:
@@ -433,14 +451,14 @@ def chat_ui(
     ctx: UserContext = Depends(resolve_user_context),
     container: ApplicationContainer = Depends(get_container),
 ):
-    # Materials Intent Round 2A-2 is a business-MySQL capability. Explicit
-    # ranking/series/quality requests must execute before the imported
-    # company-data overview router, otherwise words such as “最高/样品/数据”
-    # are reduced to a 496-row dataset overview instead of the requested
-    # deterministic analysis.
+    # Materials Intent Round 2A is a business-MySQL capability. Explicit and
+    # context-resolved material requests must execute before the low-priority
+    # imported company-data overview router.
+    history = [{"role": x.role, "content": x.content} for x in body.history[-12:]]
     round2a2_decision = _route_round2a2_database_intent(
         body.message,
         container.core.rule_router,
+        history,
     )
     if round2a2_decision is not None:
         try:
@@ -458,13 +476,13 @@ def chat_ui(
         except Exception as exc:
             raise HTTPException(
                 500,
-                f"Round 2A-2 数据库分析失败：{type(exc).__name__}: {exc}",
+                f"Round 2A 数据库分析失败：{type(exc).__name__}: {exc}",
             ) from exc
 
         evidence = result.get("evidence", []) if isinstance(result, dict) else []
         warnings = result.get("warnings", []) if isinstance(result, dict) else []
         routing = {
-            "version": "2A-2.5",
+            "version": "2A-2.6",
             "domain": (
                 "validate"
                 if round2a2_decision.intent == "data_quality_check"
@@ -502,9 +520,9 @@ def chat_ui(
             data=result,
             evidence=evidence,
             warnings=warnings,
-            router="materials_round2a2_mysql",
+            router="materials_round2a_mysql",
             reasoning_summary=(
-                "明确的 Round 2A-2 材料研发意图优先读取业务 MySQL；"
+                "明确或由上下文恢复的 Round 2A 材料研发意图优先读取业务 MySQL；"
                 "海科导入数据概览未参与本次执行。"
             ),
             routing=routing,
@@ -516,7 +534,7 @@ def chat_ui(
         body.message,
         body.history,
     )
-    if company_decision["route"]:
+    if company_data_has_priority(company_decision):
         company_scope = (
             company_decision.get(
                 "conversation_scope"
@@ -709,7 +727,6 @@ def chat_ui(
         )
 
     engine = DeepSeekIntentRouter(container.llm)
-    history = [{"role": x.role, "content": x.content} for x in body.history[-12:]]
     routing_meta: dict[str, Any] = {}
     needs_clarification = False
     clarification_question = ""

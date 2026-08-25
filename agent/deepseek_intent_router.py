@@ -10,11 +10,11 @@ from agent.conversation_context import (
     build_conversation_hints,
 )
 from agent.intent_v2 import DeepSeekIntentDecision, IntentToolPlanStep
-from agent.router import RuleIntentRouter
+from agent.router import IntentDecision, RuleIntentRouter
 from llm.base import LLMProvider
 
 
-INTENT_ROUTER_CONTEXT_SCHEMA_VERSION = "2.1.1"
+INTENT_ROUTER_CONTEXT_SCHEMA_VERSION = "2.1.2"
 
 
 _ALLOWED_TOOLS = {
@@ -330,6 +330,7 @@ class DeepSeekIntentRouter:
 - 你可以参考 conversation_history 和 backend_context_hints 解析“这个样品、它、刚才那个、只看配方、继续、不是3811是3812”等表达。
 - 对“继续/只看/只查看/我想看/我可以只查看/换成/不是A是B”等 follow-up，不要把 primary_intent 写成 continue_previous/user_correction。primary_intent 必须仍是最终要执行的业务意图；把对话动作写入 context_reference.action，并把最终参数直接修正好。
 - “我可以只查看性能么 / 我只想看看配方 / 那只看工艺”若本轮没有明确新样品，必须复用当前 active sample；绝对不要把“看性能么/看看配方/工艺呢”等自然语言片段当成 identifier。
+- “这两个样品/两个样品/两者/它们”必须优先复用 backend_context_hints.active_comparison_identifiers；例如上一轮比较3811和3809配方，本轮问“这两个样品的工艺有什么区别”，必须输出 process_difference + compare_samples(3811, 3809)。没有可恢复的两个样品时必须请求澄清，不能转成单位/海科数据概览。
 - “Project 115呢？/那全部项目呢？”如果上一轮正在做历史检索，只表示修改历史检索 scope，必须继承上一轮历史任务和检索主题，不得把问题重置成“Project 115 是什么”。
 - “历史上有没有和这个类似的冲击强度异常？”若 history 能唯一确定“这个”是哪一个样品，应使用 sample_historical_similarity，并复用该样品。
 - 如果历史中能唯一确定样品，可以复用；若有多个候选且无法确定，needs_clarification=true。
@@ -563,6 +564,12 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
         """
         text = str(message or "").strip()
         samples = list(hints.current_sample_identifiers)
+        if (
+            not samples
+            and hints.current_pair_referential
+            and len(hints.active_comparison_identifiers) >= 2
+        ):
+            samples = list(hints.active_comparison_identifiers[:2])
 
         if "样品" in text and any(marker in text.lower() for marker in (
             "最好", "最高", "最低", "排序", "排名", "前几", "top",
@@ -603,6 +610,39 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
         )):
             return "sample_full_profile"
         return None
+
+    @classmethod
+    def deterministic_material_followup_decision(
+        cls,
+        message: str,
+        history: list[dict[str, str]] | None = None,
+    ) -> IntentDecision | None:
+        """Resolve explicit pair follow-ups before unrelated dataset routers.
+
+        This deliberately handles only a referential pair whose identifiers are
+        deterministically recoverable from user history. Other semantic routing
+        remains the DeepSeek router's responsibility.
+        """
+        hints = build_conversation_hints(message, history or [])
+        if (
+            not hints.current_pair_referential
+            or len(hints.active_comparison_identifiers) < 2
+        ):
+            return None
+        intent = cls._deterministic_material_intent(message, hints)
+        if intent not in {
+            "formula_difference",
+            "process_difference",
+            "comparability_check",
+        }:
+            return None
+        args: dict[str, Any] = {
+            "left_identifier": hints.active_comparison_identifiers[0],
+            "right_identifier": hints.active_comparison_identifiers[1],
+        }
+        if intent == "comparability_check" and hints.current_metrics:
+            args["target_metric"] = hints.current_metrics[-1]
+        return IntentDecision(intent, "compare_samples", args)
 
     @staticmethod
     def _normalize_mapping(value: Any) -> dict[str, Any]:
@@ -736,6 +776,14 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                         or str(existing_identifier).strip() != explicit_identifier
                     ):
                         result[key] = explicit_identifier
+            elif (
+                hints.current_pair_referential
+                and len(hints.active_comparison_identifiers) >= 2
+            ):
+                # The latest explicit user pair is authoritative over model
+                # guesses for “这两个样品/两者/它们”.
+                result["left_identifier"] = hints.active_comparison_identifiers[0]
+                result["right_identifier"] = hints.active_comparison_identifiers[1]
             elif (hints.scope_only_followup or hints.scope_reset_followup) and len(hints.active_history_sample_identifiers) >= 2:
                 result.setdefault("left_identifier", hints.active_history_sample_identifiers[0])
                 result.setdefault("right_identifier", hints.active_history_sample_identifiers[1])

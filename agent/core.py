@@ -76,6 +76,11 @@ class AgentCore:
 禁止补全不存在的字段、单位或测试条件。
 如果测试条件 status=missing_both，不得写成“测试条件相同”，只能写“双方测试条件均未记录”。
 如果动态字段 resolved=false，保留 raw_key 并说明未解析。
+【面向用户的表达要求】
+- 第一段直接回答用户问题，再给必要证据；不要先复述系统限制或工具结构。
+- 正文不要暴露 Tool Result、purpose_inference、cross_project_assessment、field_summary、resolved、raw_key、source、conditions、recipe_batches、craft_detail、data_column、sample_materials 等内部键名或表名；应转换成自然中文，例如“数据库未记录测试条件”“该字段未完成结构化解析”。只有用户明确要求执行详情时才说明技术字段。
+- null/None/空对象统一表述为“未记录”，不要直接展示 null、None 或空数组。
+- 同一个限制或缺失数量只说明一次；证据缺口放在结尾，不要重复压过主要结论。
 对于 performance_difference，优先按照 facts / hypotheses / evidence_gaps / conclusion_limit 组织答案。
 对于 sample_full_profile / formula_difference / process_difference / comparability_check：
 - 数值差值、相对变化、配方算术和只能直接引用 Tool Result 中的确定性计算，不得自行重新计算。

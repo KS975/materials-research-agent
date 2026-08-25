@@ -35,6 +35,10 @@ class RuleIntentRouter:
         "能直接比较", "可以直接比较", "能不能直接比较", "能不能比较",
         "可以比较吗", "是否可比", "可比吗", "可比性", "适合比较",
     )
+    _pair_referential_markers = (
+        "这两个样品", "这两个样本", "这两个", "两个样品", "两个样本",
+        "两者", "二者", "它们", "刚才比较的两个", "前面比较的两个",
+    )
     _rank_markers = ("最好", "最高", "最低", "排序", "排名", "前几", "top")
     _rank_request_prefix = re.compile(
         r"^(?:(?:请|麻烦)\s*)?"
@@ -102,6 +106,13 @@ class RuleIntentRouter:
         pair_decision = self._route_explicit_pair_question(text)
         if pair_decision is not None:
             return pair_decision
+
+        # A stateless fallback router cannot resolve “这两个样品” safely.
+        # Return no decision so the context-aware router can restore the latest
+        # explicit pair, or ask for clarification when no pair exists. Never
+        # query a literal sample identifier such as “这两个样品的”.
+        if any(marker in text for marker in self._pair_referential_markers):
+            return None
 
         match = self._compare.search(text)
         if match:
