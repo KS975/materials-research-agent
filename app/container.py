@@ -22,8 +22,10 @@ from llm.factory import create_llm_provider
 from file_processing import UnifiedFileParser
 from runtime.chat_attachments import ChatAttachmentStore
 from skills.current_attachment import CurrentAttachmentSkill
+from skills.general_conversation import GeneralConversationFallbackSkill
 from skills.historical_knowledge import HistoricalKnowledgeRAGSkill
 from skills.joint_mysql_knowledge import JointMySQLKnowledgeAnalysisSkill
+from skills.sample_historical_similarity import SampleHistoricalSimilaritySkill
 from knowledge import OpenAICompatibleEmbeddingProvider, QdrantKnowledgeRepository
 from knowledge.file_ingestion import KnowledgeFileIngestionService
 from runtime.store import create_runtime_store
@@ -61,6 +63,11 @@ class ApplicationContainer:
         self.registry.register("get_performance", "读取样品性能及测试条件", self.tools.get_performance)
         self.registry.register("compare_samples", "比较两个样品的配方、工艺、性能和测试条件", self.tools.compare_samples)
         self.registry.register("find_samples", "在当前公司/项目权限范围内查找样品", self.tools.find_samples)
+        self.registry.register(
+            "list_samples_for_analysis",
+            "按授权项目和样品名范围读取有界样品集合，供确定性排序、系列和质量分析",
+            self.tools.list_samples_for_analysis,
+        )
 
         self.llm = create_llm_provider(settings)
         # V0.1.2-A: Current Chat temporary attachments
@@ -75,6 +82,9 @@ class ApplicationContainer:
 
         self.current_attachment_skill = CurrentAttachmentSkill(
             self.chat_attachment_store,
+            self.llm,
+        )
+        self.general_conversation_skill = GeneralConversationFallbackSkill(
             self.llm,
         )
 
@@ -93,7 +103,17 @@ class ApplicationContainer:
             max_hits=settings.knowledge_rag_max_hits,
         )
 
-        # V0.1.2 T07: read-only MySQL facts + same-project historical RAG.
+        # One-sample MySQL facts + historical similarity RAG. Historical
+        # project scope is independent from the sample's own project.
+        self.sample_historical_similarity_skill = SampleHistoricalSimilaritySkill(
+            self.registry,
+            self.open_knowledge_repository,
+            self.llm,
+            score_threshold=settings.knowledge_rag_score_threshold,
+            max_hits=settings.knowledge_rag_max_hits,
+        )
+
+        # V0.1.2 T07: read-only MySQL facts + historical RAG.
         self.joint_mysql_knowledge_skill = JointMySQLKnowledgeAnalysisSkill(
             self.registry,
             self.open_knowledge_repository,

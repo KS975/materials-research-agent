@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from data.dynamic_fields import DynamicFieldResolver
@@ -73,11 +74,41 @@ class MaterialsTools:
         self.experiments = experiments
         self.resolver = resolver
 
+    @staticmethod
+    def _normalize_sample_identifier(identifier: str | int) -> str | int:
+        """Defensive normalization at the DB-tool boundary.
+
+        The router should already extract entities, but a fallback route or LLM
+        must never be able to turn “查看样品3811具体信息” into an exact-name DB
+        lookup for that whole phrase. Only unwrap a single standalone numeric ID;
+        names such as ABS-051 / B251218-6 are intentionally left untouched.
+        """
+        if isinstance(identifier, int):
+            return identifier
+        value = str(identifier or "").strip()
+        if value.isdigit():
+            return int(value)
+        numeric_ids = re.findall(
+            r"(?<![A-Za-z0-9_.-])(\d{3,})(?![A-Za-z0-9_.-])",
+            value,
+        )
+        if len(numeric_ids) == 1 and any(
+            marker in value
+            for marker in ("样品", "样本", "编号", "查看", "查询", "查", "具体信息", "详细信息")
+        ):
+            return int(numeric_ids[0])
+        return value
+
     def _locate_sample(self, identifier: str | int, ctx: UserContext) -> dict[str, Any]:
+        requested_identifier = identifier
+        identifier = self._normalize_sample_identifier(identifier)
         if isinstance(identifier, int) or str(identifier).strip().isdigit():
             row = self.samples.get_by_id(int(identifier), ctx)
             if not row:
-                return {"status": "not_found", "identifier": str(identifier)}
+                result = {"status": "not_found", "identifier": str(identifier)}
+                if str(requested_identifier).strip() != str(identifier):
+                    result["requested_identifier"] = str(requested_identifier)
+                return result
             return {"status": "ok", "sample": row}
 
         matches = self.samples.find_exact_name(str(identifier).strip(), ctx)
@@ -233,6 +264,174 @@ class MaterialsTools:
             "warnings": [],
         }
 
+    def list_samples_for_analysis(
+        self,
+        keyword: str,
+        ctx: UserContext,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Read the complete authorized set in bounded keyset pages."""
+        try:
+            page_size = max(1, min(int(limit), 500))
+        except (TypeError, ValueError):
+            page_size = 500
+        total_matches = self.samples.count_for_analysis(keyword, ctx)
+        rows = []
+        seen_ids: set[int] = set()
+        before_id: int | None = None
+        page_count = 0
+        pagination_aborted = False
+        while True:
+            page = self.samples.list_for_analysis(
+                keyword,
+                ctx,
+                limit=page_size,
+                before_id=before_id,
+            )
+            if not page:
+                break
+            page_count += 1
+            page_ids = [int(row["id"]) for row in page]
+            fresh_rows = [row for row in page if int(row["id"]) not in seen_ids]
+            rows.extend(fresh_rows)
+            seen_ids.update(int(row["id"]) for row in fresh_rows)
+
+            next_before_id = min(page_ids)
+            if before_id is not None and next_before_id >= before_id:
+                pagination_aborted = True
+                break
+            before_id = next_before_id
+            if len(page) < page_size:
+                break
+        raw_mappings = []
+        formula_ids: set[int] = set()
+        dynamic_ids: set[int] = set()
+        for row in rows:
+            formula_raw = decode_json_mapping(row.get("recipes"))
+            process_raw = decode_json_mapping(row.get("craft_param"))
+            performance_raw = decode_json_mapping(row.get("performances"))
+            raw_mappings.append((formula_raw, process_raw, performance_raw))
+            for key in formula_raw:
+                match = re.fullmatch(r"R3-(\d+)", str(key))
+                if match:
+                    formula_ids.add(int(match.group(1)))
+            for mapping, pattern in (
+                (process_raw, r"S(\d+)"),
+                (performance_raw, r"P(\d+)"),
+            ):
+                for key in mapping:
+                    match = re.fullmatch(pattern, str(key))
+                    if match:
+                        dynamic_ids.add(int(match.group(1)))
+
+        formula_definitions = self.resolver.materials.get_sample_materials(
+            formula_ids, ctx.company_id
+        )
+        dynamic_definitions = self.resolver.columns.get_by_ids(
+            dynamic_ids, ctx.company_id
+        )
+        samples = []
+        unresolved = []
+        for row, mappings in zip(rows, raw_mappings):
+            sample_id = int(row["id"])
+            formula_raw, process_raw, performance_raw = mappings
+            formula = self._resolve_prefetched_fields(
+                formula_raw,
+                pattern=r"R3-(\d+)",
+                definitions=formula_definitions,
+                source="sample_materials",
+            )
+            process = self._resolve_prefetched_fields(
+                process_raw,
+                pattern=r"S(\d+)",
+                definitions=dynamic_definitions,
+                source="data_column",
+            )
+            performance = self._resolve_prefetched_fields(
+                performance_raw,
+                pattern=r"P(\d+)",
+                definitions=dynamic_definitions,
+                source="data_column",
+            )
+            unresolved_fields = [
+                item.get("raw_key")
+                for group in (formula, process, performance)
+                for item in group
+                if not item.get("resolved")
+            ]
+            if unresolved_fields:
+                unresolved.append({"sample_id": sample_id, "fields": unresolved_fields})
+            samples.append({
+                "sample": {
+                    "id": sample_id,
+                    "name": row.get("name"),
+                    "project_id": row.get("project_id"),
+                    "sample_type": row.get("sample_type"),
+                    "create_time": row.get("create_time"),
+                },
+                "formula": formula,
+                "process": process,
+                "performance": performance,
+                "conditions": decode_json_mapping(row.get("conditions")),
+            })
+        warnings = []
+        if unresolved:
+            warnings.append("部分样品存在未解析动态字段。")
+        if pagination_aborted:
+            warnings.append("样品分页游标未继续前进，已停止读取以避免重复扫描。")
+        elif total_matches != len(samples):
+            warnings.append(
+                f"分页开始时匹配 {total_matches} 条，实际读取 {len(samples)} 条；"
+                "扫描期间数据库记录可能发生变化。"
+            )
+        return {
+            "status": "ok",
+            "keyword": str(keyword or "").strip(),
+            "count": len(samples),
+            "total_matches": total_matches,
+            "scan_limit": None,
+            "scan_page_size": page_size,
+            "scan_page_count": page_count,
+            "scan_complete": not pagination_aborted,
+            "scan_truncated": pagination_aborted,
+            "samples": samples,
+            "similar_names": (
+                self.samples.suggest_similar_names(keyword, ctx)
+                if keyword and not samples
+                else []
+            ),
+            "unresolved_dynamic_fields": unresolved,
+            "evidence": [
+                {"source": "eln_sample", "record_id": item["sample"]["id"]}
+                for item in samples
+            ],
+            "warnings": warnings,
+        }
+
+    @staticmethod
+    def _resolve_prefetched_fields(
+        mapping: dict[str, Any],
+        *,
+        pattern: str,
+        definitions: dict[int, dict[str, Any]],
+        source: str,
+    ) -> list[dict[str, Any]]:
+        resolved = []
+        for raw_key, value in mapping.items():
+            match = re.fullmatch(pattern, str(raw_key))
+            field_id = int(match.group(1)) if match else None
+            definition = definitions.get(field_id) if field_id is not None else None
+            resolved.append({
+                "raw_key": str(raw_key),
+                "field_id": field_id,
+                "name": definition.get("name") if definition else None,
+                "unit": definition.get("unit") if definition else None,
+                "value": value,
+                "resolved": bool(definition),
+                "source": source if definition else None,
+            })
+        return resolved
+
     @staticmethod
     def _keyed(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         return {str(item.get("name") or item.get("raw_key")): item for item in items}
@@ -250,11 +449,22 @@ class MaterialsTools:
         for key in keys:
             av = a.get(key)
             bv = b.get(key)
+            left_unit = av.get("unit") if av else None
+            right_unit = bv.get("unit") if bv else None
+            unit_match = None
+            if av is not None and bv is not None:
+                if left_unit and right_unit:
+                    unit_match = str(left_unit) == str(right_unit)
+                elif left_unit is None and right_unit is None:
+                    unit_match = True
             payload = {
                 "field": key,
                 "left": av.get("value") if av else None,
                 "right": bv.get("value") if bv else None,
-                "unit": (av or bv or {}).get("unit"),
+                "unit": left_unit or right_unit,
+                "left_unit": left_unit,
+                "right_unit": right_unit,
+                "unit_match": unit_match,
                 "left_present": av is not None,
                 "right_present": bv is not None,
             }

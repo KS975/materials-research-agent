@@ -44,6 +44,21 @@ from runtime.v014_ui import (
 router = APIRouter(prefix="/api/v1", tags=["chat-ui"])
 
 
+_ROUND2A2_DATABASE_INTENTS = {
+    "performance_rank",
+    "experiment_series_analysis",
+    "data_quality_check",
+}
+
+_EXPLICIT_COMPANY_DATA_MARKERS = (
+    "单位真实数据",
+    "公司真实数据",
+    "海科数据",
+    "海科总库",
+    "导入的真实数据",
+)
+
+
 class HistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1, max_length=8000)
@@ -65,6 +80,23 @@ class ChatUIResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     router: str = "deepseek"
     reasoning_summary: str = ""
+    routing: dict[str, Any] = Field(default_factory=dict)
+
+
+def _route_round2a2_database_intent(message: str, rule_router):
+    """Reserve explicit Round 2A-2 R&D questions for business MySQL.
+
+    The imported company-data runtime remains available only when the current
+    turn explicitly names that source. This function is intentionally narrow:
+    it does not make generic sample lookup/comparison bypass other routers.
+    """
+    text = str(message or "").strip()
+    if any(marker in text for marker in _EXPLICIT_COMPANY_DATA_MARKERS):
+        return None
+    decision = rule_router.route(text)
+    if decision is None or decision.intent not in _ROUND2A2_DATABASE_INTENTS:
+        return None
+    return decision
 
 
 def _looks_like_joint_mysql_knowledge(message: str) -> bool:
@@ -129,6 +161,25 @@ def _resolve_historical_project_id(
             detail="当前用户无权检索该项目历史知识",
         )
     return project_id
+
+
+def _resolve_sample_history_args(
+    tool_args: dict[str, Any],
+    ctx: UserContext,
+) -> dict[str, Any]:
+    project_id = _resolve_historical_project_id(tool_args, ctx)
+    identifier = tool_args.get("identifier")
+    if identifier is None or str(identifier).strip() == "":
+        raise HTTPException(
+            status_code=400,
+            detail="样品历史相似分析缺少 identifier",
+        )
+    return {
+        "project_id": project_id,
+        "identifier": identifier,
+        "target_metric": str(tool_args.get("target_metric") or "").strip(),
+        "history_query": str(tool_args.get("history_query") or "").strip(),
+    }
 
 
 def _resolve_joint_args(
@@ -382,6 +433,83 @@ def chat_ui(
     ctx: UserContext = Depends(resolve_user_context),
     container: ApplicationContainer = Depends(get_container),
 ):
+    # Materials Intent Round 2A-2 is a business-MySQL capability. Explicit
+    # ranking/series/quality requests must execute before the imported
+    # company-data overview router, otherwise words such as “最高/样品/数据”
+    # are reduced to a 496-row dataset overview instead of the requested
+    # deterministic analysis.
+    round2a2_decision = _route_round2a2_database_intent(
+        body.message,
+        container.core.rule_router,
+    )
+    if round2a2_decision is not None:
+        try:
+            result = container.core.execute(
+                round2a2_decision.intent,
+                round2a2_decision.tool_name,
+                dict(round2a2_decision.tool_args),
+                ctx,
+            )
+            answer = container.core.answer(
+                body.message,
+                round2a2_decision.intent,
+                result,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                500,
+                f"Round 2A-2 数据库分析失败：{type(exc).__name__}: {exc}",
+            ) from exc
+
+        evidence = result.get("evidence", []) if isinstance(result, dict) else []
+        warnings = result.get("warnings", []) if isinstance(result, dict) else []
+        routing = {
+            "version": "2A-2.5",
+            "domain": (
+                "validate"
+                if round2a2_decision.intent == "data_quality_check"
+                else "analyze"
+            ),
+            "primary_intent": round2a2_decision.intent,
+            "secondary_intents": [],
+            "entities": {
+                "metrics": [round2a2_decision.tool_args["target_metric"]]
+                if round2a2_decision.tool_args.get("target_metric")
+                else [],
+                "series_keyword": round2a2_decision.tool_args.get("keyword") or None,
+            },
+            "scope": {
+                "company": "current",
+                "projects": "authorized",
+                "data_source": "business_mysql",
+            },
+            "constraints": {"read_only": True, "deterministic_calculation": True},
+            "context_reference": {"action": "new_request"},
+            "tool_plan": [{
+                "kind": "tool",
+                "name": round2a2_decision.tool_name,
+                "args": dict(round2a2_decision.tool_args),
+                "purpose": "读取授权范围内的 MySQL 样品并执行确定性材料分析",
+            }],
+            "needs_clarification": False,
+            "clarification_question": "",
+        }
+        return ChatUIResponse(
+            answer=answer,
+            intent=round2a2_decision.intent,
+            tool_name=round2a2_decision.tool_name,
+            tool_args=dict(round2a2_decision.tool_args),
+            data=result,
+            evidence=evidence,
+            warnings=warnings,
+            router="materials_round2a2_mysql",
+            reasoning_summary=(
+                "明确的 Round 2A-2 材料研发意图优先读取业务 MySQL；"
+                "海科导入数据概览未参与本次执行。"
+            ),
+            routing=routing,
+        )
+
     # User-provided company real data is a deterministic local runtime route.
     # It never mutates the read-only business MySQL.
     company_decision = _classify_company_real_data_turn(
@@ -582,12 +710,18 @@ def chat_ui(
 
     engine = DeepSeekIntentRouter(container.llm)
     history = [{"role": x.role, "content": x.content} for x in body.history[-12:]]
+    routing_meta: dict[str, Any] = {}
+    needs_clarification = False
+    clarification_question = ""
 
     try:
         decision = engine.route(body.message, history, attachment_meta)
         router_name = "deepseek"
         summary = decision.reasoning_summary
         intent, tool_name, tool_args = decision.intent, decision.tool_name, decision.tool_args
+        routing_meta = decision.to_routing_meta()
+        needs_clarification = decision.needs_clarification
+        clarification_question = decision.clarification_question
     except Exception as exc:
         # A joint request must never silently degrade to only one evidence source.
         if _looks_like_joint_mysql_knowledge(body.message):
@@ -613,10 +747,15 @@ def chat_ui(
                     router_name = "attachment_fallback"
                     summary = "DeepSeek 路由失败，按当前 Chat 附件问题处理。"
                 else:
-                    raise HTTPException(
-                        400,
-                        f"DeepSeek 意图识别失败：{type(exc).__name__}: {exc}",
-                    ) from exc
+                    # If the JSON router fails and no deterministic Tool rule
+                    # applies, give DeepSeek one guarded natural-language answer
+                    # attempt instead of returning the old capability template.
+                    intent, tool_name, tool_args = "general_conversation", None, {}
+                    router_name = "deepseek_answer_fallback"
+                    summary = (
+                        "DeepSeek JSON 意图路由失败，转入无 Tool 的受约束通用回答；"
+                        "本轮不得声称使用数据库、附件或历史知识证据。"
+                    )
             else:
                 intent, tool_name, tool_args = (
                     fallback.intent,
@@ -626,9 +765,46 @@ def chat_ui(
                 router_name = "rule_fallback"
                 summary = "DeepSeek 路由失败，使用 V0.1.1 规则路由兜底。"
 
+    if not routing_meta:
+        routing_meta = {
+            "version": "fallback",
+            "domain": "conversation" if tool_name is None else "retrieve",
+            "primary_intent": intent,
+            "secondary_intents": [],
+            "entities": {},
+            "scope": {"company": "current", "projects": "authorized"},
+            "constraints": {},
+            "context_reference": {"action": "fallback"},
+            "tool_plan": ([{
+                "kind": "tool",
+                "name": tool_name,
+                "args": dict(tool_args),
+                "purpose": "fallback execution",
+            }] if tool_name else []),
+            "needs_clarification": False,
+            "clarification_question": "",
+        }
+
+    if needs_clarification:
+        return ChatUIResponse(
+            answer=(clarification_question or "当前信息不足，请补充样品、指标或分析范围。"),
+            intent="clarification_required",
+            tool_name=None,
+            tool_args=tool_args,
+            data={
+                "requested_intent": intent,
+                "needs_clarification": True,
+            },
+            evidence=[],
+            warnings=[],
+            router=router_name,
+            reasoning_summary=summary,
+            routing=routing_meta,
+        )
+
     if intent in {"analyze_current_attachment", "ask_current_attachment"}:
         if not body.attachment_ids:
-            raise HTTPException(status_code=400, detail="请先上传 PDF 或 DOCX 附件")
+            raise HTTPException(status_code=400, detail="请先上传 PDF、DOCX 或 XLSX 附件")
         try:
             result = container.current_attachment_skill.answer(
                 message=body.message,
@@ -654,6 +830,38 @@ def chat_ui(
             warnings=result.get("warnings", []),
             router=router_name,
             reasoning_summary=summary,
+            routing=routing_meta,
+        )
+
+    if intent == "sample_historical_similarity":
+        args = _resolve_sample_history_args(tool_args, ctx)
+        try:
+            result = container.sample_historical_similarity_skill.answer(
+                message=body.message,
+                ctx=ctx,
+                **args,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"样品 + 历史资料相似分析失败：{type(exc).__name__}: {exc}",
+            ) from exc
+
+        return ChatUIResponse(
+            answer=result.get("answer", ""),
+            intent=intent,
+            tool_name=None,
+            tool_args=args,
+            data=result,
+            evidence=result.get("evidence", []),
+            warnings=result.get("warnings", []),
+            router=router_name,
+            reasoning_summary=summary,
+            routing=routing_meta,
         )
 
     if intent == "joint_mysql_knowledge_analysis":
@@ -684,13 +892,14 @@ def chat_ui(
             warnings=result.get("warnings", []),
             router=router_name,
             reasoning_summary=summary,
+            routing=routing_meta,
         )
 
-    if intent == "search_historical_knowledge":
+    if intent in {"search_historical_knowledge", "historical_similar_case"}:
         project_id = _resolve_historical_project_id(tool_args, ctx)
         try:
             result = container.historical_knowledge_skill.answer(
-                message=body.message,
+                message=(str(tool_args.get("history_query") or "").strip() or body.message),
                 project_id=project_id,
                 ctx=ctx,
             )
@@ -708,29 +917,44 @@ def chat_ui(
             answer=result.get("answer", ""),
             intent=intent,
             tool_name=None,
-            tool_args={"project_id": project_id},
+            tool_args={
+                "project_id": project_id,
+                "history_query": str(tool_args.get("history_query") or "").strip(),
+            },
             data=result,
             evidence=result.get("evidence", []),
             warnings=result.get("warnings", []),
             router=router_name,
             reasoning_summary=summary,
+            routing=routing_meta,
         )
 
-    if intent == "unsupported_future_feature":
+    if intent in {"general_conversation", "unsupported_future_feature"}:
+        try:
+            result = container.general_conversation_skill.answer(
+                message=body.message,
+                history=history,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"DeepSeek 通用回答失败：{type(exc).__name__}: {exc}",
+            ) from exc
         return ChatUIResponse(
-            answer=(
-                "当前系统已进入 V0.3：支持附件/历史知识分析、真实公司数据查询与 "
-                "Reality Check、Dataset/ML/BO、V0.2 实验反馈闭环，以及 V0.3 "
-                "Simulator 自主实验编排。当前请求尚未匹配到可执行能力；"
-                "如果你在问公司真实数据，可以直接说“真实样本多少”“查看公司真实数据”"
-                "或写明具体产品名称。"
-            ),
+            answer=result.get("answer", ""),
             intent=intent,
             tool_name=None,
-            tool_args=tool_args,
-            data={"available_version": "V0.3"},
-            router=router_name,
+            tool_args={},
+            data=result,
+            evidence=[],
+            warnings=result.get("warnings", []),
+            router=(
+                "deepseek_general_answer"
+                if router_name == "deepseek"
+                else router_name
+            ),
             reasoning_summary=summary,
+            routing=routing_meta,
         )
 
     if tool_name is None:
@@ -754,4 +978,5 @@ def chat_ui(
         warnings=warnings,
         router=router_name,
         reasoning_summary=summary,
+        routing=routing_meta,
     )

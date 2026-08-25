@@ -28,4 +28,7 @@ def test_t07_router_allows_joint_intent():
     assert decision.tool_args["left_identifier"] == 3811
     assert decision.tool_args["right_identifier"] == 3809
     assert decision.tool_args["target_metric"] == "冲击强度"
-    assert decision.tool_args["project_id"] == 115
+    # The user did not explicitly name Project 115 in this turn. Router V2
+    # removes the ungrounded project id so downstream RAG searches the
+    # caller's authorized company-wide history scope.
+    assert "project_id" not in decision.tool_args

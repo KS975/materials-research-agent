@@ -66,3 +66,88 @@ class SampleRepository:
             sql,
             [ctx.company_id, *scope_params, f"%{keyword}%"],
         )
+
+    def list_for_analysis(
+        self,
+        keyword: str,
+        ctx: UserContext,
+        limit: int = 500,
+        before_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return one keyset-paginated page for deterministic analysis."""
+        scope_sql, scope_params = project_scope_clause(
+            ctx.project_ids, allow_all=ctx.all_projects
+        )
+        lim = bounded_limit(limit, default=500, maximum=500)
+        cursor_sql = ""
+        cursor_params: list[int] = []
+        if before_id is not None:
+            cursor_sql = "AND id < %s"
+            cursor_params.append(int(before_id))
+        sql = f"""
+            SELECT {_SAMPLE_COLUMNS}
+            FROM eln_sample
+            WHERE company = %s
+              AND (`delete` IS NULL OR `delete` IN (0, 2))
+              AND {scope_sql}
+              AND name LIKE %s
+              {cursor_sql}
+            ORDER BY id DESC
+            LIMIT {lim}
+        """
+        return self.db.query_all(
+            sql,
+            [
+                ctx.company_id,
+                *scope_params,
+                f"%{str(keyword or '').strip()}%",
+                *cursor_params,
+            ],
+        )
+
+    def count_for_analysis(self, keyword: str, ctx: UserContext) -> int:
+        scope_sql, scope_params = project_scope_clause(
+            ctx.project_ids, allow_all=ctx.all_projects
+        )
+        sql = f"""
+            SELECT COUNT(*) AS count
+            FROM eln_sample
+            WHERE company = %s
+              AND (`delete` IS NULL OR `delete` IN (0, 2))
+              AND {scope_sql}
+              AND name LIKE %s
+        """
+        row = self.db.query_one(
+            sql,
+            [ctx.company_id, *scope_params, f"%{str(keyword or '').strip()}%"],
+        ) or {}
+        return int(row.get("count") or 0)
+
+    def suggest_similar_names(
+        self,
+        keyword: str,
+        ctx: UserContext,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        value = str(keyword or "").strip()
+        if not value:
+            return []
+        scope_sql, scope_params = project_scope_clause(
+            ctx.project_ids, allow_all=ctx.all_projects
+        )
+        lim = bounded_limit(limit, default=10, maximum=20)
+        prefix = value[: max(1, min(4, len(value)))]
+        sql = f"""
+            SELECT id, name, project_id
+            FROM eln_sample
+            WHERE company = %s
+              AND (`delete` IS NULL OR `delete` IN (0, 2))
+              AND {scope_sql}
+              AND name LIKE %s
+            ORDER BY id DESC
+            LIMIT {lim}
+        """
+        return self.db.query_all(
+            sql,
+            [ctx.company_id, *scope_params, f"%{prefix}%"],
+        )
