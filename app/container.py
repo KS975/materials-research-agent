@@ -10,6 +10,7 @@ from agent.tools import MaterialsTools
 from app.config import Settings, get_settings
 from data.dynamic_fields import DynamicFieldResolver
 from data.mysql.client import BusinessMySQLClient
+from data.mysql.explorer import AuthorizedDatabaseExplorer
 from data.mysql.repositories import (
     ArchiveRepository,
     ColumnDefinitionRepository,
@@ -22,6 +23,7 @@ from llm.factory import create_llm_provider
 from file_processing import UnifiedFileParser
 from runtime.chat_attachments import ChatAttachmentStore
 from skills.current_attachment import CurrentAttachmentSkill
+from skills.database_explorer import DatabaseExplorerSkill
 from skills.general_conversation import GeneralConversationFallbackSkill
 from skills.historical_knowledge import HistoricalKnowledgeRAGSkill
 from skills.joint_mysql_knowledge import JointMySQLKnowledgeAnalysisSkill
@@ -75,6 +77,17 @@ class ApplicationContainer:
         )
 
         self.llm = create_llm_provider(settings)
+        self.database_explorer = AuthorizedDatabaseExplorer(self.db)
+        self.database_explorer_skill = DatabaseExplorerSkill(
+            self.database_explorer,
+            self.llm,
+            mode=settings.database_explorer_mode,
+            trust_local_llm=settings.database_explorer_trust_local_llm,
+            max_attempts=settings.database_explorer_max_attempts,
+            max_rows=settings.database_explorer_max_rows,
+            query_timeout_ms=settings.database_explorer_query_timeout_ms,
+            max_result_chars=settings.database_explorer_max_result_chars,
+        )
         # V0.1.2-A: Current Chat temporary attachments
         self.file_parser = UnifiedFileParser()
         # Compatibility name kept for the frozen V0.1.2-A upload endpoint.

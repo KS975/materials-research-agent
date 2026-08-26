@@ -152,6 +152,25 @@ def _looks_like_historical_knowledge(message: str) -> bool:
     return any(marker in message for marker in markers)
 
 
+def _looks_like_unmatched_database_question(message: str) -> bool:
+    """Conservative fail-safe used only when the JSON intent router crashes."""
+    text = str(message or "").strip()
+    strong_scope = any(marker in text for marker in (
+        "数据库", "库里", "数据表", "表中", "表里", "样品记录", "项目记录",
+    ))
+    material_scope_count = sum(
+        marker in text
+        for marker in (
+            "样品", "样本", "项目", "配方", "工艺", "性能", "实验", "批次",
+        )
+    )
+    query_request = any(marker in text for marker in (
+        "查", "找", "哪些", "哪个", "多少", "有没有", "统计", "分布",
+        "趋势", "关系", "最近", "最常见", "汇总", "分析",
+    ))
+    return query_request and (strong_scope or material_scope_count >= 2)
+
+
 def _resolve_historical_project_id(
     tool_args: dict[str, Any],
     ctx: UserContext,
@@ -748,6 +767,15 @@ def chat_ui(
             )
 
     engine = DeepSeekIntentRouter(container.llm)
+    database_explorer_skill = getattr(
+        container,
+        "database_explorer_skill",
+        None,
+    )
+    database_explorer_enabled = bool(
+        database_explorer_skill is not None
+        and getattr(database_explorer_skill, "enabled", False)
+    )
     routing_meta: dict[str, Any] = {}
     needs_clarification = False
     clarification_question = ""
@@ -758,6 +786,10 @@ def chat_ui(
             history,
             attachment_meta,
             field_catalog=field_catalog,
+            database_explorer_enabled=database_explorer_enabled,
+            database_explorer_mode=str(
+                getattr(database_explorer_skill, "mode", "off")
+            ),
         )
         router_name = "deepseek"
         summary = decision.reasoning_summary
@@ -789,6 +821,16 @@ def chat_ui(
                     intent, tool_name, tool_args = "ask_current_attachment", None, {}
                     router_name = "attachment_fallback"
                     summary = "DeepSeek 路由失败，按当前 Chat 附件问题处理。"
+                elif (
+                    database_explorer_enabled
+                    and _looks_like_unmatched_database_question(body.message)
+                ):
+                    intent, tool_name, tool_args = "database_explorer", None, {}
+                    router_name = "database_explorer_fail_safe"
+                    summary = (
+                        "DeepSeek JSON 意图路由失败，但当前问题明确要求业务数据库事实；"
+                        "转入授权只读 Database Explorer。"
+                    )
                 else:
                     # If the JSON router fails and no deterministic Tool rule
                     # applies, give DeepSeek one guarded natural-language answer
@@ -809,21 +851,35 @@ def chat_ui(
                 summary = "DeepSeek 路由失败，使用 V0.1.1 规则路由兜底。"
 
     if not routing_meta:
+        is_database_explorer = intent == "database_explorer"
         routing_meta = {
-            "version": "fallback",
-            "domain": "conversation" if tool_name is None else "retrieve",
+            "version": "DBE-0.1" if is_database_explorer else "fallback",
+            "domain": (
+                "retrieve"
+                if is_database_explorer or tool_name is not None
+                else "conversation"
+            ),
             "primary_intent": intent,
             "secondary_intents": [],
             "entities": {},
             "scope": {"company": "current", "projects": "authorized"},
-            "constraints": {},
+            "constraints": ({
+                "read_only": True,
+                "authorized_virtual_sources_only": True,
+                "bounded_sql_retry": True,
+            } if is_database_explorer else {}),
             "context_reference": {"action": "fallback"},
             "tool_plan": ([{
                 "kind": "tool",
                 "name": tool_name,
                 "args": dict(tool_args),
                 "purpose": "fallback execution",
-            }] if tool_name else []),
+            }] if tool_name else ([{
+                "kind": "skill",
+                "name": "database_explorer",
+                "args": {},
+                "purpose": "授权只读数据库探索兜底",
+            }] if is_database_explorer else [])),
             "needs_clarification": False,
             "clarification_question": "",
         }
@@ -969,6 +1025,43 @@ def chat_ui(
             warnings=result.get("warnings", []),
             router=router_name,
             reasoning_summary=summary,
+            routing=routing_meta,
+        )
+
+    if intent == "database_explorer":
+        if not database_explorer_enabled or database_explorer_skill is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Database Explorer 当前未启用。",
+            )
+        try:
+            result = database_explorer_skill.answer(
+                message=body.message,
+                history=history,
+                ctx=ctx,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database Explorer 执行失败：{type(exc).__name__}: {exc}",
+            ) from exc
+        return ChatUIResponse(
+            answer=result.get("answer", ""),
+            intent=intent,
+            tool_name="database_explorer",
+            tool_args={},
+            data=result,
+            evidence=result.get("evidence", []),
+            warnings=result.get("warnings", []),
+            router="deepseek_database_explorer",
+            reasoning_summary=(
+                summary
+                or "未命中高精度意图，转入授权只读 Database Explorer。"
+            ),
             routing=routing_meta,
         )
 

@@ -55,6 +55,7 @@ _ALLOWED_INTENTS = _ALLOWED_TOOLS | {
     "historical_similar_case",
     "sample_historical_similarity",
     "joint_mysql_knowledge_analysis",
+    "database_explorer",
     "general_conversation",
     "unsupported_future_feature",
     "clarification_required",
@@ -66,6 +67,7 @@ _SPECIAL_NO_TOOL_INTENTS = {
     "search_historical_knowledge",
     "sample_historical_similarity",
     "joint_mysql_knowledge_analysis",
+    "database_explorer",
     "general_conversation",
     "unsupported_future_feature",
     "clarification_required",
@@ -181,6 +183,7 @@ _DOMAIN_BY_INTENT = {
     "search_historical_knowledge": "knowledge",
     "sample_historical_similarity": "diagnosis",
     "joint_mysql_knowledge_analysis": "diagnosis",
+    "database_explorer": "retrieve",
     "general_conversation": "conversation",
     "unsupported_future_feature": "system",
     "clarification_required": "conversation",
@@ -272,6 +275,8 @@ class DeepSeekIntentRouter:
         history: list[dict[str, str]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
         field_catalog: dict[str, Any] | None = None,
+        database_explorer_enabled: bool = False,
+        database_explorer_mode: str = "off",
     ) -> DeepSeekIntentDecision:
         hints = build_conversation_hints(message, history)
         system_prompt = self._system_prompt()
@@ -284,6 +289,12 @@ class DeepSeekIntentRouter:
                 field_catalog,
                 message,
             ),
+            "backend_capabilities": {
+                "database_explorer": {
+                    "enabled": bool(database_explorer_enabled),
+                    "mode": str(database_explorer_mode or "off"),
+                },
+            },
         }
         raw = self.llm.complete(
             system_prompt,
@@ -297,6 +308,7 @@ class DeepSeekIntentRouter:
             attachments=attachments or [],
             hints=hints,
             field_catalog=field_catalog,
+            database_explorer_enabled=database_explorer_enabled,
         )
 
     @staticmethod
@@ -364,6 +376,14 @@ class DeepSeekIntentRouter:
 - joint_mysql_knowledge_analysis，tool_name=null
 - 必须提取 left_identifier、right_identifier、target_metric、direction_claim；只有用户明确项目号时才给 project_id。
 
+6) Database Explorer 兜底：
+- database_explorer，tool_name=null。
+- 只有输入的 backend_capabilities.database_explorer.enabled=true 时才允许使用。
+- 仅用于“需要当前业务 MySQL 事实、但不属于任何已定义高精度意图”的开放数据库问题。
+- 已定义的样品查看、比较、排名、实验系列、多条件筛选、历史知识、附件等意图永远优先，不能为了自由查询而降级到 database_explorer。
+- 此 Intent Router 仍然严禁生成 SQL；后续独立的受控 Database Explorer 会读取授权虚拟 Schema、生成并校验只读 SQL。
+- 与当前业务数据库无关的材料知识、日常问题和普通讨论仍使用 general_conversation。
+
 高级 Dataset/ML/BO/V0.2/V0.3 请求在进入本路由器之前通常由上层确定性路由处理。
 - 普通材料知识、研发方法、概念解释、建议讨论、寒暄或其它不需要当前数据库/附件/RAG事实的问题，使用 general_conversation，tool_name=null，由 DeepSeek 通用回答层直接回答。
 - 要求当前数据库/样品/附件中的事实但缺少必要对象时，优先 needs_clarification=true，不要降级为没有证据的通用知识回答。
@@ -391,7 +411,7 @@ performance_rank, experiment_series_analysis, data_quality_check, find_samples_m
 analyze_cause, analyze_performance_difference,
 analyze_current_attachment, ask_current_attachment,
 search_historical_knowledge, sample_historical_similarity, joint_mysql_knowledge_analysis,
-general_conversation, unsupported_future_feature, clarification_required
+database_explorer, general_conversation, unsupported_future_feature, clarification_required
 
 【tool_name 白名单】
 get_sample_context, get_formula, get_process, get_performance, compare_samples, find_samples, list_samples_for_analysis，或 null。
@@ -445,6 +465,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
         attachments: list[dict[str, Any]],
         hints: ConversationHints,
         field_catalog: dict[str, Any] | None = None,
+        database_explorer_enabled: bool = False,
     ) -> DeepSeekIntentDecision:
         raw_intent = str(
             data.get("primary_intent")
@@ -508,6 +529,12 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             raise ValueError(f"未允许的 intent: {raw_intent or intent}")
         if tool_name is not None and tool_name not in _ALLOWED_TOOLS:
             raise ValueError(f"未允许的 tool_name: {tool_name}")
+
+        # The router may know this future intent, but it must never activate it
+        # unless the backend explicitly enabled the guarded explorer framework.
+        if intent == "database_explorer" and not database_explorer_enabled:
+            intent = "general_conversation"
+            tool_name = None
 
         if intent in _SPECIAL_NO_TOOL_INTENTS:
             tool_name = None
@@ -587,6 +614,15 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                     "source_sample_count": field_catalog.get("source_sample_count", 0),
                     "contains_values": False,
                 }
+        elif intent == "database_explorer":
+            scope["data_source"] = "business_mysql"
+            constraints.update({
+                "read_only": True,
+                "authorized_virtual_sources_only": True,
+                "company_project_scope_enforced_by_backend": True,
+                "bounded_sql_retry": True,
+                "arbitrary_physical_table_access": False,
+            })
 
         model_needs_clarification = bool(data.get("needs_clarification", False))
         missing = self._missing_required_args(intent, args)
@@ -614,6 +650,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "experiment_series_analysis",
             "data_quality_check",
             "find_samples_multi_condition",
+            "database_explorer",
         }:
             domain = _DOMAIN_BY_INTENT[intent]
         elif domain not in _ALLOWED_DOMAINS:
@@ -637,7 +674,11 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             clarification_question=clarification_question,
             reasoning_summary=reasoning_summary,
             router_version=(
-                "2B-1.1" if intent == "find_samples_multi_condition" else "2.1"
+                "DBE-0.1"
+                if intent == "database_explorer"
+                else "2B-1.1"
+                if intent == "find_samples_multi_condition"
+                else "2.1"
             ),
         )
 
@@ -1080,6 +1121,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                 "direction_claim",
                 "project_id",
             },
+            "database_explorer": set(),
             "general_conversation": set(),
             "unsupported_future_feature": set(),
         }
@@ -1284,6 +1326,17 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                         "project_id": args.get("project_id")
                     } if args.get("project_id") is not None else {},
                     purpose="检索当前 Company 授权范围内的相似历史案例",
+                ),
+            )
+        if intent == "database_explorer":
+            return (
+                IntentToolPlanStep(
+                    kind="skill",
+                    name="database_explorer",
+                    args={},
+                    purpose=(
+                        "对未匹配高精度意图的业务数据库问题执行受控只读探索"
+                    ),
                 ),
             )
         if intent == "sample_historical_similarity":

@@ -113,6 +113,37 @@ class BusinessMySQLClient:
                 rows = cursor.fetchall()
         return list(rows)
 
+    def query_all_explorer(
+        self,
+        sql: str,
+        params: Sequence[Any] | None = None,
+        *,
+        timeout_ms: int = 8000,
+    ) -> list[dict[str, Any]]:
+        """Run one validated explorer query with an additional session timeout.
+
+        The socket read timeout configured on the connection remains the final
+        fallback.  MySQL and MariaDB expose different statement-timeout
+        variables, so unsupported session settings are intentionally ignored.
+        """
+        assert_read_only_sql(sql)
+        timeout = max(100, min(int(timeout_ms), 120000))
+        with self._connection() as conn:
+            with conn.cursor() as cursor:
+                try:
+                    cursor.execute("SET SESSION MAX_EXECUTION_TIME = %s", (timeout,))
+                except Exception:
+                    try:
+                        cursor.execute(
+                            "SET SESSION max_statement_time = %s",
+                            (timeout / 1000.0,),
+                        )
+                    except Exception:
+                        pass
+                cursor.execute(sql, tuple(params or ()))
+                rows = cursor.fetchall()
+        return list(rows)
+
     def query_one(self, sql: str, params: Sequence[Any] | None = None) -> dict[str, Any] | None:
         rows = self.query_all(sql, params)
         return rows[0] if rows else None

@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     llm_model: str = ""
     llm_timeout: int = 60
 
+    # DB Explorer V0.1. ``local_full`` sends authorized query results back to
+    # the configured LLM, so it requires an explicit local-trust acknowledgement.
+    database_explorer_mode: Literal["off", "schema_only", "local_full"] = "off"
+    database_explorer_trust_local_llm: bool = False
+    database_explorer_max_attempts: int = 4
+    database_explorer_max_rows: int = 200
+    database_explorer_query_timeout_ms: int = 8000
+    database_explorer_max_result_chars: int = 60000
+
     # V0.1.2-A: current Chat temporary attachments
     chat_upload_dir: str = ".runtime/chat_uploads"
     chat_upload_max_mb: int = 25
@@ -79,6 +88,24 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Agent Runtime 必须使用独立数据库；RUNTIME_DB_NAME 不能等于 BUSINESS_DB_NAME"
                 )
+        if self.database_explorer_mode != "off" and not self.llm_enabled:
+            raise ValueError("启用 Database Explorer 时必须设置 LLM_ENABLED=true")
+        if (
+            self.database_explorer_mode == "local_full"
+            and not self.database_explorer_trust_local_llm
+        ):
+            raise ValueError(
+                "DATABASE_EXPLORER_MODE=local_full 时必须显式设置 "
+                "DATABASE_EXPLORER_TRUST_LOCAL_LLM=true"
+            )
+        if not 1 <= self.database_explorer_max_attempts <= 8:
+            raise ValueError("DATABASE_EXPLORER_MAX_ATTEMPTS 必须在 1 到 8 之间")
+        if not 1 <= self.database_explorer_max_rows <= 1000:
+            raise ValueError("DATABASE_EXPLORER_MAX_ROWS 必须在 1 到 1000 之间")
+        if not 100 <= self.database_explorer_query_timeout_ms <= 120000:
+            raise ValueError(
+                "DATABASE_EXPLORER_QUERY_TIMEOUT_MS 必须在 100 到 120000 之间"
+            )
         return self
 
 
