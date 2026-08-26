@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from agent.deepseek_intent_router import DeepSeekIntentRouter
+from agent.multi_condition import looks_like_multi_condition_request
 from api.chat import resolve_user_context
 from app.container import ApplicationContainer, get_container
 from schemas.user_context import UserContext
@@ -726,13 +727,38 @@ def chat_ui(
             }
         )
 
+    field_catalog = None
+    if looks_like_multi_condition_request(body.message):
+        try:
+            field_catalog = (
+                container.core.material_intelligence_skill.get_field_catalog(ctx)
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Round 2B-1.1 授权字段目录读取失败："
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            ) from exc
+        if not isinstance(field_catalog, dict) or field_catalog.get("status") != "ok":
+            raise HTTPException(
+                status_code=500,
+                detail="Round 2B-1.1 授权字段目录不完整，已停止 Schema-Aware 路由。",
+            )
+
     engine = DeepSeekIntentRouter(container.llm)
     routing_meta: dict[str, Any] = {}
     needs_clarification = False
     clarification_question = ""
 
     try:
-        decision = engine.route(body.message, history, attachment_meta)
+        decision = engine.route(
+            body.message,
+            history,
+            attachment_meta,
+            field_catalog=field_catalog,
+        )
         router_name = "deepseek"
         summary = decision.reasoning_summary
         intent, tool_name, tool_args = decision.intent, decision.tool_name, decision.tool_args

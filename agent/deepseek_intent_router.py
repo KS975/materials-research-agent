@@ -10,6 +10,16 @@ from agent.conversation_context import (
     build_conversation_hints,
 )
 from agent.intent_v2 import DeepSeekIntentDecision, IntentToolPlanStep
+from agent.field_catalog import (
+    bind_filters_to_catalog,
+    field_catalog_for_prompt,
+)
+from agent.multi_condition import (
+    looks_like_multi_condition_request,
+    normalize_filters,
+    normalize_logic,
+    unit_is_explicit_in_text,
+)
 from agent.router import IntentDecision, RuleIntentRouter
 from llm.base import LLMProvider
 
@@ -35,6 +45,7 @@ _ALLOWED_INTENTS = _ALLOWED_TOOLS | {
     "performance_rank",
     "experiment_series_analysis",
     "data_quality_check",
+    "find_samples_multi_condition",
     "historical_similar_case",
     "analyze_cause",
     "analyze_performance_difference",
@@ -79,6 +90,10 @@ _INTENT_ALIASES = {
     "performance_lookup": "get_performance",
     "search_samples": "find_samples",
     "sample_search": "find_samples",
+    "filter_samples": "list_samples_for_analysis",
+    "multi_condition_sample_search": "list_samples_for_analysis",
+    "filter_samples": "find_samples_multi_condition",
+    "multi_condition_sample_search": "find_samples_multi_condition",
     "sample_compare": "compare_samples",
     "compare_sample": "compare_samples",
     "formula_compare": "formula_difference",
@@ -140,6 +155,7 @@ _TOOL_ALIASES = {
     "performance_rank": "list_samples_for_analysis",
     "experiment_series_analysis": "list_samples_for_analysis",
     "data_quality_check": "list_samples_for_analysis",
+    "find_samples_multi_condition": "list_samples_for_analysis",
 }
 
 _DOMAIN_BY_INTENT = {
@@ -156,6 +172,7 @@ _DOMAIN_BY_INTENT = {
     "performance_rank": "analyze",
     "experiment_series_analysis": "analyze",
     "data_quality_check": "validate",
+    "find_samples_multi_condition": "retrieve",
     "historical_similar_case": "knowledge",
     "analyze_cause": "analyze",
     "analyze_performance_difference": "diagnosis",
@@ -182,6 +199,7 @@ _REQUIRED_ARGS = {
     "comparability_check": ("left_identifier", "right_identifier"),
     "performance_rank": ("target_metric",),
     "experiment_series_analysis": ("keyword",),
+    "find_samples_multi_condition": ("filters",),
     "analyze_cause": ("identifier",),
     "analyze_performance_difference": (
         "left_identifier",
@@ -209,6 +227,7 @@ _EXPECTED_TOOL_BY_INTENT = {
     "performance_rank": "list_samples_for_analysis",
     "experiment_series_analysis": "list_samples_for_analysis",
     "data_quality_check": "list_samples_for_analysis",
+    "find_samples_multi_condition": "list_samples_for_analysis",
     "find_samples": "find_samples",
     "analyze_cause": "get_sample_context",
     "analyze_performance_difference": "compare_samples",
@@ -252,6 +271,7 @@ class DeepSeekIntentRouter:
         message: str,
         history: list[dict[str, str]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        field_catalog: dict[str, Any] | None = None,
     ) -> DeepSeekIntentDecision:
         hints = build_conversation_hints(message, history)
         system_prompt = self._system_prompt()
@@ -260,6 +280,10 @@ class DeepSeekIntentRouter:
             "current_message": message,
             "current_chat_attachments": attachments or [],
             "backend_context_hints": hints.to_dict(),
+            "authorized_material_field_catalog": field_catalog_for_prompt(
+                field_catalog,
+                message,
+            ),
         }
         raw = self.llm.complete(
             system_prompt,
@@ -272,6 +296,7 @@ class DeepSeekIntentRouter:
             history=history or [],
             attachments=attachments or [],
             hints=hints,
+            field_catalog=field_catalog,
         )
 
     @staticmethod
@@ -301,6 +326,24 @@ class DeepSeekIntentRouter:
 - data_quality_check：检查授权范围或 keyword 范围内的缺失、重复、非数值和配方记录值算术和；tool_name=list_samples_for_analysis。
 - historical_similar_case：仅检索“以前有没有类似情况/案例”的历史 Knowledge；tool_name=null。若明确针对单一样品，使用 sample_historical_similarity。
 排序、计数、比例和异常标记全部由后端 Python 计算，Router 不计算。
+
+1C) Materials Intent Round 2B-1（多条件样品筛选）：
+- find_samples_multi_condition：用户按一个或多个样品基础信息、配方、工艺、性能或测试条件查找样品；tool_name=list_samples_for_analysis。
+- tool_args 结构：
+  {
+    "filters":[
+      {"section":"sample|formula|process|performance|conditions", "field":"字段中文名", "operator":"eq|ne|gt|gte|lt|lte|between|in|contains|exists|missing", "value":单值, "values":数组, "unit":"用户明确写出的单位"}
+    ],
+    "logic":"and|or",
+    "keyword":"可选的样品名/实验系列关键词",
+    "result_limit":50
+  }
+- between 使用恰好两个 values；in 使用 values；exists/missing 不要输出 value；其它 operator 使用 value。
+- section=sample 只允许 field=id/name/project_id/sample_type/create_time；测试条件整体是否有记录时用 section=conditions, field="*", operator=exists/missing。
+- unit 只有用户原句明确写出时才能输出，绝对不要根据常识或数据库字段名补单位。后端不自动换算单位。
+- keyword 只用于用户明确给出的样品名称或系列名称范围（如 N20260305），不要把整句筛选要求塞进 keyword。
+- 只生成上述结构化条件；严禁生成 SQL、表名、列名、JOIN、WHERE 或数据库连接信息。实际读取、权限过滤、数值比较、缺失处理和计数均由后端确定性执行。
+- 若输入中的 authorized_material_field_catalog 非空，它是当前用户授权范围内的权威字段目录。section 和 field 必须从目录选择并使用 canonical field 原名：例如目录存在 formula.PC 时，“PC含量”必须输出 field="PC"；目录只在 performance 中存在“成本”时，必须输出 section="performance", field="成本"。不得把“含量/数值/指标”等口语后缀拼进新字段名。
 
 2) 性能差异分析：
 - primary_intent=analyze_performance_difference
@@ -335,6 +378,7 @@ class DeepSeekIntentRouter:
 - “历史上有没有和这个类似的冲击强度异常？”若 history 能唯一确定“这个”是哪一个样品，应使用 sample_historical_similarity，并复用该样品。
 - 如果历史中能唯一确定样品，可以复用；若有多个候选且无法确定，needs_clarification=true。
 - 不得编造样品 ID、项目 ID、性能指标。
+- “找/筛选/列出冲击强度大于40且成本低于30的样品”“项目115里PC含量大于50%的样品”属于 find_samples_multi_condition，不要降级成 find_samples(keyword)，也不要生成 SQL。
 - 一句话包含多个需求时：primary_intent 表示当前首先要执行/最终落地的主业务意图；其它语义放 secondary_intents。现阶段只有后端已验证的 Tool/Skill 会真正执行。
 - 同一句话明确要求“数据库样品事实 + 历史资料”时，必须用 joint_mysql_knowledge_analysis，不能降级成单一数据源。
 - 有附件且用户明确问“这份/附件/报告/表格/Excel”的内容时，优先走 current attachment。
@@ -343,7 +387,7 @@ class DeepSeekIntentRouter:
 【primary_intent 白名单】
 get_sample_context, get_formula, get_process, get_performance, compare_samples, find_samples,
 sample_full_profile, formula_difference, process_difference, comparability_check,
-performance_rank, experiment_series_analysis, data_quality_check, historical_similar_case,
+performance_rank, experiment_series_analysis, data_quality_check, find_samples_multi_condition, historical_similar_case,
 analyze_cause, analyze_performance_difference,
 analyze_current_attachment, ask_current_attachment,
 search_historical_knowledge, sample_historical_similarity, joint_mysql_knowledge_analysis,
@@ -400,6 +444,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
         history: list[dict[str, str]],
         attachments: list[dict[str, Any]],
         hints: ConversationHints,
+        field_catalog: dict[str, Any] | None = None,
     ) -> DeepSeekIntentDecision:
         raw_intent = str(
             data.get("primary_intent")
@@ -497,6 +542,18 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             context_reference=context_reference,
         )
         args = self._sanitize_tool_args(intent=intent, args=args)
+        filter_validation_errors: list[str] = []
+        filter_bindings: list[dict[str, Any]] = []
+        if intent == "find_samples_multi_condition":
+            (
+                args,
+                filter_validation_errors,
+                filter_bindings,
+            ) = self._normalize_multi_condition_args(
+                args,
+                message,
+                field_catalog,
+            )
 
         secondary_intents = self._normalize_secondary_intents(
             data.get("secondary_intents"),
@@ -511,12 +568,40 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             context_reference,
         )
         constraints = self._normalize_mapping(data.get("constraints"))
+        if intent == "find_samples_multi_condition":
+            scope["data_source"] = "business_mysql"
+            constraints.update({
+                "read_only": True,
+                "deterministic_filtering": True,
+                "arbitrary_sql": False,
+                "unit_conversion": False,
+            })
+            if filter_validation_errors:
+                constraints["filter_validation_errors"] = filter_validation_errors
+            if filter_bindings:
+                constraints["field_bindings"] = filter_bindings
+            if field_catalog and field_catalog.get("status") == "ok":
+                constraints["field_catalog"] = {
+                    "schema_version": field_catalog.get("schema_version"),
+                    "total_field_count": field_catalog.get("total_field_count", 0),
+                    "source_sample_count": field_catalog.get("source_sample_count", 0),
+                    "contains_values": False,
+                }
 
         model_needs_clarification = bool(data.get("needs_clarification", False))
         missing = self._missing_required_args(intent, args)
-        needs_clarification = model_needs_clarification or bool(missing)
+        needs_clarification = (
+            model_needs_clarification
+            or bool(missing)
+            or bool(filter_validation_errors)
+        )
         clarification_question = str(data.get("clarification_question") or "").strip()
-        if needs_clarification and not clarification_question:
+        if filter_validation_errors:
+            clarification_question = (
+                "我没能安全解析完整的筛选条件。请明确写出字段、比较关系和值，"
+                "例如“冲击强度大于40，并且成本低于30”；需要限定单位时也请写出单位。"
+            )
+        elif needs_clarification and not clarification_question:
             clarification_question = self._clarification_question(intent, missing)
 
         domain = str(data.get("domain") or "").strip()
@@ -528,6 +613,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "performance_rank",
             "experiment_series_analysis",
             "data_quality_check",
+            "find_samples_multi_condition",
         }:
             domain = _DOMAIN_BY_INTENT[intent]
         elif domain not in _ALLOWED_DOMAINS:
@@ -550,6 +636,9 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             needs_clarification=needs_clarification,
             clarification_question=clarification_question,
             reasoning_summary=reasoning_summary,
+            router_version=(
+                "2B-1.1" if intent == "find_samples_multi_condition" else "2.1"
+            ),
         )
 
     @staticmethod
@@ -570,6 +659,9 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             and len(hints.active_comparison_identifiers) >= 2
         ):
             samples = list(hints.active_comparison_identifiers[:2])
+
+        if looks_like_multi_condition_request(text):
+            return "find_samples_multi_condition"
 
         if "样品" in text and any(marker in text.lower() for marker in (
             "最好", "最高", "最低", "排序", "排名", "前几", "top",
@@ -841,6 +933,89 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
         return result
 
     @staticmethod
+    def _normalize_multi_condition_args(
+        args: dict[str, Any],
+        message: str,
+        field_catalog: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
+        normalized, errors = normalize_filters(args.get("filters"))
+        result: dict[str, Any] = {
+            "filters": [] if errors else normalized,
+            "logic": normalize_logic(args.get("logic")),
+        }
+        if not errors:
+            for spec in result["filters"]:
+                if spec.get("unit") and not unit_is_explicit_in_text(
+                    spec["unit"], message
+                ):
+                    # The model is not allowed to infer a unit from material
+                    # knowledge. An omitted user unit remains omitted so the
+                    # deterministic executor can detect mixed-unit ambiguity.
+                    spec.pop("unit", None)
+
+                if spec["section"] == "sample" and spec["field"] == "project_id":
+                    expected_values = (
+                        spec.get("values")
+                        if spec.get("operator") in {"between", "in"}
+                        else [spec.get("value")]
+                    )
+                    for expected in expected_values or []:
+                        pattern = (
+                            rf"(?:project|项目)\s*(?:id|编号|号)?\s*"
+                            rf"(?:为|是|=|：|:|#)?\s*{re.escape(str(expected))}(?!\d)"
+                        )
+                        if not re.search(pattern, message, re.I):
+                            errors.append("项目筛选值必须由用户在当前问题中明确给出")
+                            break
+
+        bindings: list[dict[str, Any]] = []
+        if not errors and field_catalog:
+            bound_filters, bindings, binding_errors = bind_filters_to_catalog(
+                result["filters"],
+                field_catalog,
+            )
+            if binding_errors:
+                for item in binding_errors:
+                    candidates = "、".join(
+                        f"{candidate.get('section')}.{candidate.get('field')}"
+                        for candidate in item.get("candidates") or []
+                    )
+                    if item.get("code") == "ambiguous_field":
+                        errors.append(
+                            f"字段“{item.get('requested_field')}”存在多个候选"
+                            + (f"：{candidates}" if candidates else "")
+                        )
+                    else:
+                        errors.append(
+                            f"授权字段目录中不存在“{item.get('requested_field')}”"
+                        )
+            else:
+                result["filters"] = bound_filters
+
+        if errors:
+            result["filters"] = []
+
+        keyword = str(args.get("keyword") or "").strip()[:120]
+        if (
+            keyword
+            and not keyword.isdigit()
+            and keyword.casefold() in str(message or "").casefold()
+        ):
+            result["keyword"] = keyword
+        else:
+            result["keyword"] = ""
+        for key, default, upper in (
+            ("result_limit", 50, 100),
+            ("scan_limit", 500, 500),
+        ):
+            try:
+                value = int(args.get(key, default))
+            except (TypeError, ValueError):
+                value = default
+            result[key] = max(1, min(value, upper))
+        return result, errors, bindings
+
+    @staticmethod
     def _sanitize_tool_args(
         *,
         intent: str,
@@ -871,6 +1046,13 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "performance_rank": {"target_metric", "keyword", "top_n", "order", "scan_limit"},
             "experiment_series_analysis": {"keyword", "scan_limit"},
             "data_quality_check": {"keyword", "scan_limit"},
+            "find_samples_multi_condition": {
+                "filters",
+                "logic",
+                "keyword",
+                "result_limit",
+                "scan_limit",
+            },
             "analyze_cause": {"identifier"},
             "analyze_performance_difference": {
                 "left_identifier",
@@ -1014,11 +1196,14 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
     @staticmethod
     def _missing_required_args(intent: str, args: dict[str, Any]) -> list[str]:
         required = _REQUIRED_ARGS.get(intent, ())
-        return [
-            key
-            for key in required
-            if args.get(key) is None or str(args.get(key)).strip() == ""
-        ]
+        missing = []
+        for key in required:
+            value = args.get(key)
+            if value is None or str(value).strip() == "":
+                missing.append(key)
+            elif isinstance(value, (list, tuple, dict, set)) and not value:
+                missing.append(key)
+        return missing
 
     @staticmethod
     def _clarification_question(intent: str, missing: list[str]) -> str:
@@ -1048,6 +1233,11 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             return "请告诉我需要比较的两个样品（样品 ID 或名称）；如果是性能原因分析，也请说明目标性能指标。"
         if intent == "find_samples":
             return "你想按什么条件找样品？可以给材料、样品名关键词、配方或性能条件。"
+        if intent == "find_samples_multi_condition":
+            return (
+                "请明确筛选字段、比较关系和值，例如“冲击强度大于40，"
+                "并且成本低于30”；如果单位会影响判断，也请写出单位。"
+            )
         return "当前信息还不足以确定要执行的材料研发操作，请补充样品、指标或分析范围。"
 
     @staticmethod

@@ -68,6 +68,11 @@ class ApplicationContainer:
             "按授权项目和样品名范围读取有界样品集合，供确定性排序、系列和质量分析",
             self.tools.list_samples_for_analysis,
         )
+        self.registry.register(
+            "get_material_field_catalog",
+            "读取当前公司/项目授权范围内实际出现的材料字段名称、类别和单位；不返回字段值",
+            self.tools.get_material_field_catalog,
+        )
 
         self.llm = create_llm_provider(settings)
         # V0.1.2-A: Current Chat temporary attachments

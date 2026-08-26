@@ -178,6 +178,15 @@ class RuleIntentRouter:
             )
 
         if text.startswith(("找", "搜索", "查找")):
+            # Complex field predicates must be parsed into the safe Round 2B-1
+            # filter schema by DeepSeek. Never turn the whole sentence into a
+            # sample-name LIKE query when semantic routing fails.
+            if any(marker in text.casefold() for marker in (
+                "大于", "小于", "高于", "低于", "不低于", "不高于",
+                "至少", "至多", "介于", "等于", "不等于", "有记录",
+                "未记录", "缺失", ">=", "<=", "＞", "＜", " and ", " or ",
+            )):
+                return None
             keyword = re.sub(r"^(找|搜索|查找)\s*", "", text).strip("？?。 ")
             return IntentDecision(
                 "find_samples",

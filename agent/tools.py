@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from agent.field_catalog import build_material_field_catalog
 from data.dynamic_fields import DynamicFieldResolver
 from data.json_utils import decode_json_mapping, decode_json_value
 from data.mysql.repositories import (
@@ -407,6 +408,19 @@ class MaterialsTools:
             ],
             "warnings": warnings,
         }
+
+    def get_material_field_catalog(self, ctx: UserContext) -> dict[str, Any]:
+        """Return names/sections/units only for fields observed in authorized rows."""
+        source = self.list_samples_for_analysis("", ctx=ctx, limit=500)
+        if source.get("status") != "ok":
+            return source
+        catalog = build_material_field_catalog(source)
+        catalog["scope"] = {
+            "company": "current",
+            "projects": "all_authorized",
+            "data_source": "business_mysql",
+        }
+        return catalog
 
     @staticmethod
     def _resolve_prefetched_fields(

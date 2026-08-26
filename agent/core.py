@@ -86,8 +86,13 @@ class AgentCore:
 - 数值差值、相对变化、配方算术和只能直接引用 Tool Result 中的确定性计算，不得自行重新计算。
 - comparability_check 的缺失测试条件必须表述为“无法确认一致”，不得当作“相同”。
 - 只解释 Tool Result 已支持的事实，不根据常识补齐材料体系或测试标准。
-对于 performance_rank / experiment_series_analysis / data_quality_check：
+对于 performance_rank / experiment_series_analysis / data_quality_check / find_samples_multi_condition：
 - 排序、计数、比例、缺失和异常标记只能引用 Tool Result，不得重新计算。
+- find_samples_multi_condition 只能引用后端返回的 filters、matched_sample_count、matched_samples 和 filter_diagnostics；不要自行放宽/增加筛选条件，也不要把未命中写成数据库没有该样品。
+- find_samples_multi_condition 遇到 field_not_found 或 unit_ambiguity 时必须明确停止原因；不得猜字段、猜单位或自行换算后继续筛选。
+- find_samples_multi_condition 的 field_bindings 是后端依据授权字段目录完成的确定性绑定，例如“PC含量”→配方“PC”或错误类别的“成本”→性能“成本”；回答必须使用绑定后的 canonical 字段，不得恢复成模型原先的错误类别。
+- find_samples_multi_condition 遇到 field_ambiguity 时列出候选并请用户明确，不能任选一个。
+- find_samples_multi_condition 的 scanned_sample_count/total_matching_sample_count/scan_truncated 决定检索覆盖范围；同名不同 ID 不自动合并。
 - experiment_series_analysis 必须严格区分 constant_fields、variable_fields 与 missing_fields；value 为 None/空值的字段不得写成常量。
 - experiment_series_analysis 如果提供 purpose_inference，必须先说明数据库未显式记录目的，再引用其 summary 给出“实验设计推断”；不得因为缺少目的字段而完全拒绝回答，也不得把该推断写成已证实因果。
 - 命中多个 project_id 时必须按 project_groups 分组说明，并引用 cross_project_assessment；不得把不同项目直接合并成重复实验。
@@ -227,6 +232,61 @@ class AgentCore:
                     lines.extend(f"- {x}" for x in values)
             lines.append(str(assessment.get("interpretation") or ""))
             return "\n".join(x for x in lines if x)
+
+        if intent == "find_samples_multi_condition":
+            if status == "invalid_filters":
+                return "筛选条件未通过安全校验，请明确字段、比较关系和值后重试。"
+            if status == "field_not_found":
+                fields = "、".join(
+                    str(item.get("field") or item.get("requested_field") or "")
+                    for item in result.get("unknown_filter_fields", [])
+                ) or "未知字段"
+                return f"当前读取范围内没有找到筛选字段：{fields}。请确认字段名称或样品范围。"
+            if status == "field_ambiguity":
+                descriptions = []
+                for item in result.get("ambiguous_filter_fields", []):
+                    candidates = "、".join(
+                        f"{candidate.get('section')}.{candidate.get('field')}"
+                        for candidate in item.get("candidates") or []
+                    )
+                    descriptions.append(
+                        f"{item.get('requested_field')}"
+                        + (f"（候选：{candidates}）" if candidates else "")
+                    )
+                return (
+                    "筛选字段存在歧义，已停止执行。请明确字段类别："
+                    + "；".join(descriptions)
+                )
+            if status == "unit_ambiguity":
+                descriptions = []
+                for item in result.get("unit_ambiguities", []):
+                    units = "、".join(item.get("observed_units") or [])
+                    descriptions.append(f"{item.get('field')}（{units}）")
+                return (
+                    "筛选已停止：同一字段存在多种或缺失单位，不能安全混合比较。"
+                    + ("请明确单位：" + "；".join(descriptions) if descriptions else "")
+                )
+            if status == "ok":
+                lines = [
+                    f"共找到 {result.get('matched_sample_count', 0)} 个符合条件的样品。"
+                ]
+                for index, row in enumerate(result.get("matched_samples", []), 1):
+                    sample = row.get("sample") or {}
+                    lines.append(
+                        f"{index}. {sample.get('id')}（{sample.get('name')}），"
+                        f"project_id={sample.get('project_id')}"
+                    )
+                if result.get("results_truncated"):
+                    lines.append(
+                        f"当前只展示前 {result.get('returned_sample_count', 0)} 个匹配记录。"
+                    )
+                lines.append(
+                    f"已扫描 {result.get('scanned_sample_count', 0)} / "
+                    f"{result.get('total_matching_sample_count', result.get('scanned_sample_count', 0))} 条授权范围记录。"
+                )
+                if result.get("scan_truncated"):
+                    lines.append("数据库分页读取未完整结束，当前结果不代表全部授权记录。")
+                return "\n".join(lines)
 
         if intent == "performance_rank":
             if status == "unit_mismatch":
