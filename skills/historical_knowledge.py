@@ -4,6 +4,7 @@ from contextlib import AbstractContextManager
 from typing import Any, Callable
 
 from llm.base import LLMProvider
+from runtime.progress import emit_progress
 from schemas.user_context import UserContext
 
 
@@ -50,6 +51,19 @@ class HistoricalKnowledgeRAGSkill:
             project_id=project_id,
         )
 
+        emit_progress(
+            "knowledge_search",
+            "running",
+            "检索历史知识库",
+            f"正在用“{message}”检索 {scope['display_name']}。",
+            query_preview=message,
+            detail_items=[
+                {"label": "检索范围", "value": scope["display_name"]},
+                {"label": "最多返回", "value": f"{self.max_hits} 个知识片段"},
+                {"label": "相似度门槛", "value": f"{self.score_threshold:.2f}"},
+            ],
+        )
+
         with self.repository_opener() as repo:
             hits = repo.search(
                 query=message,
@@ -59,6 +73,33 @@ class HistoricalKnowledgeRAGSkill:
                 limit=self.max_hits,
                 score_threshold=self.score_threshold,
             )
+
+        hit_previews = [
+            {
+                "rank": rank,
+                "filename": hit.chunk.filename,
+                "project_id": hit.chunk.project_id,
+                "score": round(float(hit.score), 4),
+                "location": self._location(hit.chunk),
+            }
+            for rank, hit in enumerate(hits, start=1)
+        ]
+        emit_progress(
+            "knowledge_search",
+            "completed",
+            "历史资料检索完成",
+            (
+                f"命中 {len(hits)} 个达到门槛的历史片段。"
+                if hits
+                else "当前已索引历史资料中没有命中达到相似度门槛的片段。"
+            ),
+            query_preview=message,
+            evidence_preview=hit_previews,
+            detail_items=[
+                {"label": "可靠命中", "value": f"{len(hits)} 个"},
+                {"label": "检索范围", "value": scope["display_name"]},
+            ],
+        )
 
         if not hits:
             return {
@@ -132,7 +173,22 @@ class HistoricalKnowledgeRAGSkill:
             + "\n\n".join(source_blocks)
         )
 
+        emit_progress(
+            "knowledge_answer",
+            "running",
+            "阅读命中片段并组织回答",
+            "正在比较历史资料中的相似点、差异点和证据边界。",
+            evidence_preview=hit_previews,
+            plan_summary="历史相似性只作为类比证据，不直接推断当前问题具有相同原因。",
+        )
         answer = self.llm.complete(system, user)
+        emit_progress(
+            "knowledge_answer",
+            "completed",
+            "历史知识回答已生成",
+            f"回答引用了 {len(hits)} 个授权历史片段，并保留每条来源的位置与项目范围。",
+            detail_items=[{"label": "引用片段", "value": f"{len(hits)} 个"}],
+        )
         return {
             "status": "ok",
             "answer": answer,

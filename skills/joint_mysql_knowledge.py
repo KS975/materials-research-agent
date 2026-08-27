@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from agent.tool_registry import ToolRegistry
 from llm.base import LLMProvider
+from runtime.progress import emit_progress
 from schemas.user_context import UserContext
 from skills.analysis import AnalysisSkill
 
@@ -60,6 +61,38 @@ class JointMySQLKnowledgeAnalysisSkill:
             self._resolve_analysis_scope(ctx=ctx, project_id=project_id)
         )
 
+        emit_progress(
+            "joint_analysis_plan",
+            "completed",
+            "联合分析计划已确认",
+            (
+                f"先从业务 MySQL 比较样品 {left_identifier} 与 {right_identifier} 的"
+                f"{target_metric}，再检索授权历史资料并联合判断。"
+            ),
+            detail_items=[
+                {"label": "数据库对象", "value": f"样品 {left_identifier} ↔ {right_identifier}"},
+                {"label": "关注指标", "value": target_metric or "未限定"},
+                {"label": "历史范围", "value": scope["display_name"]},
+                {"label": "证据链", "value": "业务 MySQL + Qdrant 历史知识库"},
+            ],
+            plan_summary=(
+                "数据库数值用于确定当前差异；历史资料只用于寻找相似现象，"
+                "不会把相似性直接当作因果结论。"
+            ),
+        )
+
+        emit_progress(
+            "joint_mysql_query",
+            "running",
+            f"读取样品 {left_identifier} 与 {right_identifier}",
+            "正在读取样品身份、配方、工艺、性能与测试条件，并定位目标性能差异。",
+            detail_items=[
+                {"label": "只读工具", "value": "compare_samples"},
+                {"label": "查询范围", "value": scope["display_name"]},
+                {"label": "目标性能", "value": target_metric or "未限定"},
+            ],
+        )
+
         database_result = self.analysis_skill.execute(
             "compare_samples",
             {
@@ -72,6 +105,12 @@ class JointMySQLKnowledgeAnalysisSkill:
         )
 
         if not isinstance(database_result, dict) or database_result.get("status") != "ok":
+            emit_progress(
+                "joint_mysql_query",
+                "failed",
+                "数据库比较未完成",
+                "样品或目标性能未能在当前授权范围内完成确定性比较。",
+            )
             return {
                 "status": "database_error",
                 "answer": self._database_error_answer(database_result),
@@ -90,6 +129,22 @@ class JointMySQLKnowledgeAnalysisSkill:
         facts = database_result.get("facts") or {}
         left_sample = facts.get("left_sample") or {}
         right_sample = facts.get("right_sample") or {}
+        target = facts.get("target_performance") or {}
+        numeric = facts.get("numeric_difference") or {}
+        metric_name = str(target.get("field") or target_metric or "目标性能")
+        unit = str(target.get("unit") or "").strip()
+        left_value = target.get("left")
+        right_value = target.get("right")
+        difference = numeric.get("left_minus_right")
+        relative = numeric.get("relative_to_right_percent")
+        comparison_text = (
+            f"{left_sample.get('id', left_identifier)}={left_value}{(' ' + unit) if unit else ''}；"
+            f"{right_sample.get('id', right_identifier)}={right_value}{(' ' + unit) if unit else ''}"
+        )
+        if difference is not None:
+            comparison_text += f"；差值={difference}{(' ' + unit) if unit else ''}"
+        if relative is not None:
+            comparison_text += f"；相对差异={relative}%"
 
         # Defense in depth. Repositories already enforce company + project
         # permissions, but joint analysis verifies returned project membership
@@ -110,10 +165,56 @@ class JointMySQLKnowledgeAnalysisSkill:
                     "联合分析发现样品项目与指定历史知识检索项目不一致，已拒绝继续分析"
                 )
 
+        emit_progress(
+            "joint_mysql_query",
+            "completed",
+            "数据库差异已确认",
+            f"已从业务 MySQL 确认 {metric_name}：{comparison_text}。",
+            detail_items=[
+                {
+                    "label": "左侧样品",
+                    "value": (
+                        f"{left_sample.get('id', left_identifier)}"
+                        + (f"（{left_sample.get('name')}）" if left_sample.get("name") else "")
+                        + f" · Project {left_sample.get('project_id', '-')}"
+                    ),
+                },
+                {
+                    "label": "右侧样品",
+                    "value": (
+                        f"{right_sample.get('id', right_identifier)}"
+                        + (f"（{right_sample.get('name')}）" if right_sample.get("name") else "")
+                        + f" · Project {right_sample.get('project_id', '-')}"
+                    ),
+                },
+                {"label": metric_name, "value": comparison_text},
+                {
+                    "label": "同时变化字段",
+                    "value": (
+                        f"配方 {len(facts.get('formula_changes') or [])} 个，"
+                        f"工艺 {len(facts.get('process_changes') or [])} 个"
+                    ),
+                },
+            ],
+        )
+
         knowledge_query = self._knowledge_query(
             target_metric=target_metric,
             direction_claim=direction_claim,
             message=message,
+        )
+
+        emit_progress(
+            "joint_knowledge_search",
+            "running",
+            "检索历史知识库",
+            f"正在用“{knowledge_query}”检索 {scope['display_name']}。",
+            query_preview=knowledge_query,
+            detail_items=[
+                {"label": "检索范围", "value": scope["display_name"]},
+                {"label": "最多返回", "value": f"{self.max_hits} 个知识片段"},
+                {"label": "相似度门槛", "value": f"{self.score_threshold:.2f}"},
+            ],
         )
 
         with self.repository_opener() as repo:
@@ -125,6 +226,33 @@ class JointMySQLKnowledgeAnalysisSkill:
                 limit=self.max_hits,
                 score_threshold=self.score_threshold,
             )
+
+        hit_previews = [
+            {
+                "rank": rank,
+                "filename": hit.chunk.filename,
+                "project_id": hit.chunk.project_id,
+                "score": round(float(hit.score), 4),
+                "location": self._location(hit.chunk),
+            }
+            for rank, hit in enumerate(hits, start=1)
+        ]
+        emit_progress(
+            "joint_knowledge_search",
+            "completed",
+            "历史资料检索完成",
+            (
+                f"命中 {len(hits)} 个达到门槛的历史片段。"
+                if hits
+                else "当前已索引历史资料中没有命中达到相似度门槛的片段。"
+            ),
+            query_preview=knowledge_query,
+            evidence_preview=hit_previews,
+            detail_items=[
+                {"label": "可靠命中", "value": f"{len(hits)} 个"},
+                {"label": "检索范围", "value": scope["display_name"]},
+            ],
+        )
 
         knowledge_sources: list[str] = []
         knowledge_hit_summaries: list[dict[str, Any]] = []
@@ -219,7 +347,31 @@ B. HISTORICAL KNOWLEDGE：从当前公司、当前用户授权范围内的 Qdran
             f"HISTORICAL KNOWLEDGE:\n{history_payload}"
         )
 
+        emit_progress(
+            "joint_evidence_synthesis",
+            "running",
+            "联合数据库与历史证据",
+            "正在区分数据库事实、历史相似点、工程假设和证据缺口，并组织可审计回答。",
+            detail_items=[
+                {"label": "MySQL 证据", "value": f"{len(mysql_evidence)} 条"},
+                {"label": "历史证据", "value": f"{len(knowledge_evidence)} 条"},
+                {"label": "生成规则", "value": "相似不等于同因；保留测试条件与因果证据缺口"},
+            ],
+            plan_summary=(
+                "先陈述数据库可验证事实，再列历史资料及其来源，最后只提出需验证的假设。"
+            ),
+        )
         answer = self.llm.complete(system, user)
+        emit_progress(
+            "joint_evidence_synthesis",
+            "completed",
+            "联合证据回答已生成",
+            "回答已按数据库事实、历史资料、联合判断、假设、证据缺口和结论边界组织。",
+            detail_items=[
+                {"label": "数据库证据", "value": f"{len(mysql_evidence)} 条"},
+                {"label": "历史文件命中", "value": f"{len(hits)} 个片段"},
+            ],
+        )
 
         warnings = list(database_result.get("warnings", []))
         if not hits:

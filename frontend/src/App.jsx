@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  chat,
+  chatWithProgress,
   deleteChatFile,
   getModelingStatus,
   getScope,
@@ -18,6 +18,7 @@ import {
 } from "./v020_api";
 import { getAutonomyStatus, operatorOverride } from "./v030_api";
 import { getMondayDemoStatus } from "./demo_api";
+import { createInitialAnalysisStep, mergeProgressStep } from "./progress";
 
 const versions=[
   ["V0.1.1","Agent + MySQL","查询 · 对比 · 分析","done"],
@@ -680,6 +681,71 @@ function Detail({m}){
   </div>
 }
 
+function traceValue(value){
+  if(value==null)return "-";
+  if(typeof value==="string")return value;
+  if(typeof value==="number"||typeof value==="boolean")return String(value);
+  try{return JSON.stringify(value,null,2)}catch{return String(value)}
+}
+
+function AnalysisStepExtra({step}){
+  const items=Array.isArray(step.detail_items)?step.detail_items:[];
+  const evidence=Array.isArray(step.evidence_preview)?step.evidence_preview:[];
+  const query=String(step.query_preview||"").trim();
+  const queryLabel=/^\s*(SELECT|WITH)\b/i.test(query)?"脱敏只读 SQL":"实际检索词";
+  return <>
+    {step.plan_summary&&<div className="tracePlan"><b>处理计划</b><span>{step.plan_summary}</span></div>}
+    {!!items.length&&<div className="traceFacts">{items.map((item,index)=><div key={`${item.label}-${index}`}><span>{item.label}</span><b>{traceValue(item.value)}</b></div>)}</div>}
+    {query&&<div className="traceQuery"><b>{queryLabel}</b><pre>{query}</pre></div>}
+    {!!evidence.length&&<div className="traceEvidence"><b>命中证据</b>{evidence.map((item,index)=><div key={`${item.filename||item.rank||index}-${index}`}>
+      <span>{item.rank?`#${item.rank} `:""}{item.filename||"知识片段"}</span>
+      <small>{item.project_id!=null?`Project ${item.project_id} · `:""}{item.score!=null?`score ${Number(item.score).toFixed(4)} · `:""}{item.location||""}</small>
+    </div>)}</div>}
+    {step.error_preview&&<div className="traceError"><b>脱敏错误</b><pre>{traceValue(step.error_preview)}</pre></div>}
+  </>;
+}
+
+function AnalysisProgress({steps=[],live=false}){
+  const [open,setOpen]=useState(false);
+  const visible=steps.length?steps:[{
+    stage:"request_start",
+    status:"running",
+    title:"建立分析任务",
+    message:"正在建立受控分析链路…",
+    elapsed_ms:0,
+  }];
+  const hasBackendEvents=visible.some(step=>step.source==="backend");
+  const syncFallback=visible.some(step=>step.transport==="sync_fallback");
+  const hasFailure=visible.some(step=>step.status==="failed");
+  const completed=visible.filter(x=>x.status==="completed").length;
+  const active=[...visible].reverse().find(step=>
+    step.status==="running"||step.status==="retrying"
+  )||visible[visible.length-1];
+  const channelLabel=syncFallback
+    ? "兼容模式"
+    : hasBackendEvents
+      ? "后端实时"
+      : "正在连接";
+  return <div className={`analysisProgress ${live?"live":"done"} ${hasFailure?"hasFailure":""}`}>
+    <button className="analysisProgressHead" onClick={()=>setOpen(!open)}>
+      <span><i className={live?"pulse":hasFailure?"failed":"complete"}/>{live?`正在：${active?.title||"分析问题"}`:"查询与分析详情"}</span>
+      <small>{channelLabel} · {live?`${completed}/${visible.length} 步完成`:`${visible.length} 条执行记录`} · {open?"收起":"展开"}</small>
+    </button>
+    {open&&<div className="analysisTimeline">
+      {visible.map((step,index)=><div className={`analysisStep ${step.status||"running"}`} key={`${step.stage}-${index}`}>
+        <i/>
+        <div>
+          <b>{step.title||step.stage}<em>{step.source==="backend"?"后端":"前端"}</em>{step.attempt!=null&&<em>第 {step.attempt} 次</em>}</b>
+          <p>{step.message}</p>
+          <AnalysisStepExtra step={step}/>
+        </div>
+        <time>{typeof step.elapsed_ms==="number"?`${(step.elapsed_ms/1000).toFixed(1)}s`:""}</time>
+      </div>)}
+      <p className="analysisBoundary">展示本轮实际查询对象、授权数据源、检索词、脱敏 SQL、命中证据和计算依据；不展示模型隐藏思维原文、系统提示词或数据库凭证。</p>
+    </div>}
+  </div>
+}
+
 function Message({m,scope}){
   const isV020Feedback=m.data?.kind==="v020_feedback_loop";
   const isV030Autonomy=m.data?.kind==="v030_autonomy";
@@ -687,7 +753,7 @@ function Message({m,scope}){
     <div className="avatar">{m.role==="assistant"?<Logo/>:"你"}</div>
     <div className="msgcol">
       <small>{m.role==="assistant"?"材数智能体":"你"}</small>
-      <div className="bubble">{!isV020Feedback&&!isV030Autonomy&&<div className="content">{m.content}</div>}<ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/><Detail m={m}/></div>
+      <div className="bubble">{(m.pending||m.progress?.length>0)&&<AnalysisProgress steps={m.progress||[]} live={!!m.pending}/>} {!isV020Feedback&&!isV030Autonomy&&m.content&&<div className="content">{m.content}</div>}<ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/><Detail m={m}/></div>
     </div>
   </div>
 }
@@ -840,11 +906,49 @@ export default function App(){
 
   async function send(value){
     const q=(value??text).trim(); if(!q||busy||uploading)return;
-    setText(""); setErr(""); setMessages(x=>[...x,{id:id(),role:"user",content:q}]); setBusy(true);
+    const pendingId=id();
+    setText(""); setErr(""); setMessages(x=>[
+      ...x,
+      {id:id(),role:"user",content:q},
+      {id:pendingId,role:"assistant",content:"",pending:true,progress:[createInitialAnalysisStep()]},
+    ]); setBusy(true);
     try{
-      const r=await chat(q,history,scope,attachments.map(x=>x.attachmentId));
-      setMessages(x=>[...x,{id:id(),role:"assistant",content:r.answer,meta:{intent:r.intent,tool:r.tool_name,router:r.router,summary:r.reasoning_summary},data:r.data,evidence:r.evidence||[]}]);
-    }catch(e){setErr(e.message)}finally{setBusy(false)}
+      const r=await chatWithProgress(
+        q,
+        history,
+        scope,
+        attachments.map(x=>x.attachmentId),
+        progress=>setMessages(items=>items.map(item=>
+          item.id===pendingId
+            ? {...item,progress:mergeProgressStep(item.progress,progress)}
+            : item
+        )),
+      );
+      setMessages(items=>items.map(item=>item.id===pendingId?{
+        ...item,
+        pending:false,
+        content:r.answer,
+        meta:{intent:r.intent,tool:r.tool_name,router:r.router,summary:r.reasoning_summary},
+        data:r.data,
+        evidence:r.evidence||[],
+      }:item));
+    }catch(e){
+      const failedStep={
+        schema_version:"1.1",
+        source:"client",
+        stage:"request_failed",
+        status:"failed",
+        title:"本轮分析失败",
+        message:String(e?.message||e||"未知错误"),
+        elapsed_ms:0,
+      };
+      setMessages(items=>items.map(item=>item.id===pendingId?{
+        ...item,
+        pending:false,
+        progress:mergeProgressStep(item.progress,failedStep),
+      }:item));
+      setErr(String(e?.message||e||"未知错误"));
+    }finally{setBusy(false)}
   }
 
   function newChat(){setMessages([welcome]);setText("");setErr("");setAttachments([])}
@@ -864,7 +968,7 @@ export default function App(){
       <header><div><h1>研发对话</h1><p>V0.3 · Autonomous Experiment Orchestration</p></div><div><button className="versionTopBtn active" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>V0.3 · 9036</button><button className="demoModeBtn" disabled={busy||uploading} onClick={sendDemoStatus}>演示模式</button><button className="modelStatusBtn autonomyStatusBtn" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>自主状态</button><button className="modelStatusBtn feedbackStatusBtn" disabled={busy||uploading} onClick={()=>sendFeedbackStatus(MONDAY_DEMO_PROJECTS.feedback)}>V0.2 · 9026</button><button className="modelStatusBtn" disabled={busy||uploading} onClick={()=>sendModelStatus("冲击强度",MONDAY_DEMO_PROJECTS.modeling)}>模型 · 9010</button><button disabled={busy||uploading} onClick={newChat}>新对话</button></div></header>
       <section className="scroll"><div className="inner">
         {messages.length===1&&<div className="quick"><small>可以试试</small><div>{quick.map(q=><button key={q.text} onClick={()=>runQuick(q)}><span>{q.label}</span><b>{q.text}</b></button>)}</div></div>}
-        <div className="messages">{messages.map(m=><Message key={m.id} m={m} scope={scope}/>)}{busy&&<div className="msg assistant"><div className="avatar"><Logo/></div><div className="msgcol"><small>材数智能体</small><div className="bubble loading">● ● ● <span>正在读取研发证据 / 运行优化算法</span></div></div></div>}</div>
+        <div className="messages">{messages.map(m=><Message key={m.id} m={m} scope={scope}/>)}{busy&&!messages.some(m=>m.pending)&&<div className="msg assistant"><div className="avatar"><Logo/></div><div className="msgcol"><small>材数智能体</small><div className="bubble loading">● ● ● <span>正在读取研发证据 / 运行优化算法</span></div></div></div>}</div>
         {err&&<div className="error"><b>请求失败</b>{err}</div>}<div ref={end}/>
       </div></section>
 

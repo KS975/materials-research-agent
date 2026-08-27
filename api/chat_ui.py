@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent.deepseek_intent_router import DeepSeekIntentRouter
@@ -10,6 +13,7 @@ from agent.multi_condition import looks_like_multi_condition_request
 from api.chat import resolve_user_context
 from app.container import ApplicationContainer, get_container
 from schemas.user_context import UserContext
+from runtime.progress import emit_progress, progress_context
 from runtime.v030_ui import (
     V030UIError,
     build_autonomy_overview,
@@ -54,6 +58,7 @@ _ROUND2A_DATABASE_INTENTS = {
     "performance_rank",
     "experiment_series_analysis",
     "data_quality_check",
+    "similar_samples",
 }
 
 _EXPLICIT_COMPANY_DATA_MARKERS = (
@@ -69,6 +74,50 @@ _EXPLICIT_COMPANY_DATA_MARKERS = (
     "总库",
     "导入的真实数据",
 )
+
+_INTENT_PROGRESS_NAMES = {
+    "sample_full_profile": "读取样品完整档案",
+    "formula_difference": "比较样品配方差异",
+    "process_difference": "比较样品工艺差异",
+    "comparability_check": "检查样品测试可比性",
+    "performance_rank": "按性能筛选与排序",
+    "experiment_series_analysis": "分析实验系列",
+    "data_quality_check": "检查数据质量",
+    "find_samples_multi_condition": "按多个条件筛选样品",
+    "similar_samples": "计算相似样品",
+    "joint_mysql_knowledge_analysis": "样品对比 + 历史资料联合分析",
+    "sample_historical_similarity": "当前样品 + 历史案例联合分析",
+    "search_historical_knowledge": "检索历史知识库",
+    "historical_similar_case": "检索相似历史案例",
+    "database_explorer": "DeepSeek 授权数据库探索",
+    "general_conversation": "通用问答",
+    "v014_inverse_design": "多目标逆向设计",
+    "v014_next_experiments": "下一轮实验推荐",
+}
+
+
+def _intent_progress_details(intent: str, tool_args: dict[str, Any]) -> list[dict[str, str]]:
+    labels = {
+        "identifier": "样品",
+        "left_identifier": "左侧样品",
+        "right_identifier": "右侧样品",
+        "target_metric": "关注指标",
+        "keyword": "检索关键词",
+        "similarity_scope": "相似范围",
+        "top_n": "返回数量",
+        "project_id": "Project",
+        "history_query": "历史检索主题",
+    }
+    output = [{
+        "label": "任务类型",
+        "value": _INTENT_PROGRESS_NAMES.get(intent, intent),
+    }]
+    for key, label in labels.items():
+        value = tool_args.get(key)
+        if value in (None, "", []):
+            continue
+        output.append({"label": label, "value": str(value)[:500]})
+    return output
 
 
 class HistoryMessage(BaseModel):
@@ -93,6 +142,19 @@ class ChatUIResponse(BaseModel):
     router: str = "deepseek"
     reasoning_summary: str = ""
     routing: dict[str, Any] = Field(default_factory=dict)
+
+
+def initial_stream_progress_event() -> dict[str, Any]:
+    """Return the first user-safe SSE event before domain work begins."""
+    return {
+        "schema_version": "1.1",
+        "source": "backend",
+        "stage": "stream_connected",
+        "status": "completed",
+        "title": "实时分析通道已建立",
+        "message": "后端已接受请求，后续执行阶段将通过当前通道持续返回。",
+        "elapsed_ms": 0,
+    }
 
 
 def _route_round2a2_database_intent(
@@ -471,6 +533,12 @@ def chat_ui(
     ctx: UserContext = Depends(resolve_user_context),
     container: ApplicationContainer = Depends(get_container),
 ):
+    emit_progress(
+        "intent_routing",
+        "running",
+        "识别问题",
+        "正在判断应使用确定性材料能力、数据库探索或其它证据源。",
+    )
     # Materials Intent Round 2A is a business-MySQL capability. Explicit and
     # context-resolved material requests must execute before the low-priority
     # imported company-data overview router.
@@ -481,7 +549,25 @@ def chat_ui(
         history,
     )
     if round2a2_decision is not None:
+        emit_progress(
+            "intent_routing",
+            "completed",
+            "意图已识别",
+            "已匹配高精度能力："
+            f"{_INTENT_PROGRESS_NAMES.get(round2a2_decision.intent, round2a2_decision.intent)}。",
+            intent=round2a2_decision.intent,
+            detail_items=_intent_progress_details(
+                round2a2_decision.intent,
+                dict(round2a2_decision.tool_args),
+            ),
+        )
         try:
+            emit_progress(
+                "deterministic_analysis",
+                "running",
+                "执行确定性分析",
+                "正在读取业务 MySQL 证据并执行后端计算。",
+            )
             result = container.core.execute(
                 round2a2_decision.intent,
                 round2a2_decision.tool_name,
@@ -493,6 +579,12 @@ def chat_ui(
                 round2a2_decision.intent,
                 result,
             )
+            emit_progress(
+                "answer_generation",
+                "completed",
+                "组织回答",
+                "数据库事实和确定性计算结果已整理完成。",
+            )
         except Exception as exc:
             raise HTTPException(
                 500,
@@ -501,8 +593,9 @@ def chat_ui(
 
         evidence = result.get("evidence", []) if isinstance(result, dict) else []
         warnings = result.get("warnings", []) if isinstance(result, dict) else []
+        is_round2b_similarity = round2a2_decision.intent == "similar_samples"
         routing = {
-            "version": "2A-2.6",
+            "version": "2B-2.1" if is_round2b_similarity else "2A-2.6",
             "domain": (
                 "validate"
                 if round2a2_decision.intent == "data_quality_check"
@@ -511,6 +604,9 @@ def chat_ui(
             "primary_intent": round2a2_decision.intent,
             "secondary_intents": [],
             "entities": {
+                "samples": [round2a2_decision.tool_args["identifier"]]
+                if round2a2_decision.tool_args.get("identifier") is not None
+                else [],
                 "metrics": [round2a2_decision.tool_args["target_metric"]]
                 if round2a2_decision.tool_args.get("target_metric")
                 else [],
@@ -540,10 +636,21 @@ def chat_ui(
             data=result,
             evidence=evidence,
             warnings=warnings,
-            router="materials_round2a_mysql",
+            router=(
+                "materials_round2b_similarity"
+                if is_round2b_similarity
+                else "materials_round2a_mysql"
+            ),
             reasoning_summary=(
-                "明确或由上下文恢复的 Round 2A 材料研发意图优先读取业务 MySQL；"
-                "海科导入数据概览未参与本次执行。"
+                (
+                    "Round 2B-2.1：相似度由后端按同名同单位数值字段、"
+                    "字段覆盖率和归一化距离确定性计算；海科导入数据未参与。"
+                )
+                if is_round2b_similarity
+                else (
+                    "明确或由上下文恢复的 Round 2A 材料研发意图优先读取业务 MySQL；"
+                    "海科导入数据概览未参与本次执行。"
+                )
             ),
             routing=routing,
         )
@@ -670,6 +777,14 @@ def chat_ui(
     # never dependent on an LLM being enabled.
     if looks_like_inverse_design(body.message):
         project_id = _resolve_optimization_project_id(body.message, ctx)
+        emit_progress(
+            "intent_routing",
+            "completed",
+            "命中逆向设计",
+            f"已识别为 Project {project_id} 的 T17 多目标逆向设计。",
+            intent="v014_inverse_design",
+            project_id=project_id,
+        )
         try:
             report = run_inverse_design_for_ui(
                 runtime_root=_v014_runtime_root(),
@@ -678,6 +793,17 @@ def chat_ui(
             )
         except V014UIError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        emit_progress(
+            "inverse_design",
+            "completed",
+            "逆向设计完成",
+            (
+                f"计算状态为 {report.get('status', '-')}；"
+                f"返回 {len(report.get('design_cards') or [])} 组可信设计。"
+            ),
+            result_status=report.get("status"),
+            recommendation_count=len(report.get("design_cards") or []),
+        )
         return ChatUIResponse(
             answer=report.get("answer", ""),
             intent="v014_inverse_design",
@@ -696,6 +822,14 @@ def chat_ui(
     if looks_like_next_experiments(body.message):
         project_id = _resolve_optimization_project_id(body.message, ctx)
         root = _v014_runtime_root()
+        emit_progress(
+            "intent_routing",
+            "completed",
+            "命中下一轮实验推荐",
+            f"已识别为 Project {project_id} 的 T18 贝叶斯优化。",
+            intent="v014_next_experiments",
+            project_id=project_id,
+        )
         try:
             target_metric = infer_bo_target_metric(body.message, root, project_id)
             batch_size = infer_batch_size(body.message, 5)
@@ -748,6 +882,12 @@ def chat_ui(
 
     field_catalog = None
     if looks_like_multi_condition_request(body.message):
+        emit_progress(
+            "schema_loading",
+            "running",
+            "读取授权字段目录",
+            "正在读取当前权限范围内实际存在的字段名称和单位。",
+        )
         try:
             field_catalog = (
                 container.core.material_intelligence_skill.get_field_catalog(ctx)
@@ -765,6 +905,13 @@ def chat_ui(
                 status_code=500,
                 detail="Round 2B-1.1 授权字段目录不完整，已停止 Schema-Aware 路由。",
             )
+        emit_progress(
+            "schema_loading",
+            "completed",
+            "字段目录已加载",
+            f"已加载 {field_catalog.get('total_field_count', 0)} 个授权字段定义。",
+            field_count=field_catalog.get("total_field_count", 0),
+        )
 
     engine = DeepSeekIntentRouter(container.llm)
     database_explorer_skill = getattr(
@@ -781,6 +928,12 @@ def chat_ui(
     clarification_question = ""
 
     try:
+        emit_progress(
+            "intent_routing",
+            "running",
+            "DeepSeek 语义路由",
+            "正在结合当前问题和对话上下文提取业务意图。",
+        )
         decision = engine.route(
             body.message,
             history,
@@ -797,6 +950,18 @@ def chat_ui(
         routing_meta = decision.to_routing_meta()
         needs_clarification = decision.needs_clarification
         clarification_question = decision.clarification_question
+        emit_progress(
+            "intent_routing",
+            "completed",
+            "问题理解完成",
+            (
+                f"已识别为“{_INTENT_PROGRESS_NAMES.get(intent, intent)}”。"
+                + (f" {summary}" if summary else "")
+            ),
+            intent=intent,
+            detail_items=_intent_progress_details(intent, tool_args),
+            plan_summary=summary,
+        )
     except Exception as exc:
         # A joint request must never silently degrade to only one evidence source.
         if _looks_like_joint_mysql_knowledge(body.message):
@@ -1097,8 +1262,34 @@ def chat_ui(
         raise HTTPException(400, "已识别意图，但没有可执行 Tool")
 
     try:
+        emit_progress(
+            "tool_execution",
+            "running",
+            "执行材料工具",
+            f"正在执行只读工具：{tool_name}。",
+            intent=intent,
+        )
         result = container.core.execute(intent, tool_name, tool_args, ctx)
+        emit_progress(
+            "tool_execution",
+            "completed",
+            "材料工具执行完成",
+            "结构化数据库证据已返回。",
+            intent=intent,
+        )
+        emit_progress(
+            "answer_generation",
+            "running",
+            "组织回答",
+            "正在将结构化事实转换为中文回答。",
+        )
         answer = container.core.answer(body.message, intent, result)
+        emit_progress(
+            "answer_generation",
+            "completed",
+            "回答已生成",
+            "最终回答已依据本轮工具证据生成。",
+        )
     except Exception as exc:
         raise HTTPException(500, f"Agent 执行失败：{type(exc).__name__}: {exc}") from exc
 
@@ -1115,4 +1306,95 @@ def chat_ui(
         router=router_name,
         reasoning_summary=summary,
         routing=routing_meta,
+    )
+
+
+@router.post("/chat-ui/stream")
+async def chat_ui_stream(
+    body: ChatUIRequest,
+    ctx: UserContext = Depends(resolve_user_context),
+    container: ApplicationContainer = Depends(get_container),
+):
+    """SSE companion endpoint for auditable, user-safe execution progress.
+
+    The existing `/chat-ui` response contract stays unchanged.  Frontends may
+    use this endpoint to receive progress events and one final ChatUIResponse.
+    """
+    event_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    # Queue one event before starting the worker. This makes the streaming
+    # contract observable immediately, even when the selected DB/ML operation
+    # takes a long time before it can emit its first domain-specific update.
+    event_queue.put_nowait((
+        "progress",
+        initial_stream_progress_event(),
+    ))
+
+    def publish(event: dict[str, Any]) -> None:
+        loop.call_soon_threadsafe(event_queue.put_nowait, ("progress", event))
+
+    def run_request() -> None:
+        try:
+            with progress_context(publish):
+                response = chat_ui(body=body, ctx=ctx, container=container)
+                emit_progress(
+                    "request_complete",
+                    "completed",
+                    "分析完成",
+                    "已完成本轮受控分析并生成最终结果。",
+                )
+            if hasattr(response, "model_dump"):
+                payload = response.model_dump(mode="json")
+            elif hasattr(response, "dict"):
+                payload = response.dict()
+            else:
+                payload = dict(response)
+            loop.call_soon_threadsafe(
+                event_queue.put_nowait,
+                ("result", payload),
+            )
+        except HTTPException as exc:
+            loop.call_soon_threadsafe(
+                event_queue.put_nowait,
+                ("error", {
+                    "status_code": exc.status_code,
+                    "detail": str(exc.detail),
+                }),
+            )
+        except Exception as exc:
+            loop.call_soon_threadsafe(
+                event_queue.put_nowait,
+                ("error", {
+                    "status_code": 500,
+                    "detail": f"{type(exc).__name__}: {exc}",
+                }),
+            )
+
+    task = asyncio.create_task(asyncio.to_thread(run_request))
+
+    async def event_stream():
+        try:
+            while True:
+                event_name, payload = await event_queue.get()
+                encoded = json.dumps(payload, ensure_ascii=False, default=str)
+                yield f"event: {event_name}\ndata: {encoded}\n\n"
+                if event_name in {"result", "error"}:
+                    break
+        finally:
+            if not task.done():
+                # The underlying read-only worker may already be inside a DB/LLM
+                # call and cannot be force-killed safely. Cancelling only drops
+                # the asyncio waiter when the browser disconnects.
+                task.cancel()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Materials-Progress": "sse-v1.1",
+        },
     )

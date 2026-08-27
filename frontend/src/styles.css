@@ -148,3 +148,44 @@ header button{color:#374151;background:#fff;border-color:#d1d5db}header button:h
 .datasetLineage b,.feedbackPrediction b,.currentDataScope b,.currentDataScope em{color:#3f5fc5}.datasetLineage>div{background:#f8faff;border-color:#dbe4ff}.feedbackPrediction>span{color:#4b5563;background:#f8faff}.checkpointSteps span{color:#287a6d}.feedbackLiveAnswer,.autonomyLiveAnswer{color:#111827}
 .currentDataScope{background:#f0fdfa;border-color:#ccfbf1}.companyGlobalDetails{background:#fafafa}.companySourceLine{color:#6b7280}
 .demoModeBtn{border-color:#e7c777!important;background:#fff9e8!important;color:#7a5b13!important}.demoModeBtn:hover{background:#fff4ce!important}.demoHero{background:linear-gradient(135deg,#fffaf0,#f0fdfa);border-color:#f5deb0}.demoHero small{color:#7a5b13}.demoStoryline span,.demoLearningFlow span{color:#287a6d;background:#f0fdfa}.demoStoryline i,.demoLearningFlow i{color:#9ca3af}.demoVersionCaps span{color:#287a6d;background:#f0fdfa}.demoVersionAction code,.demoScope code{color:#3f5fc5}.demoBoundary b{color:#7a5b13}.demoBoundary span{color:#6b5b31;border-color:#f5deb0}.send{color:#fff;background:#4f6fe5}.send:not(:disabled):hover{background:#405dc9}
+
+/* Round 2B-2.1: auditable live analysis progress (not hidden chain-of-thought) */
+.analysisProgress{border-bottom:1px solid #e5e7eb;background:linear-gradient(135deg,#f8faff,#f7fffd)}
+.analysisProgressHead{display:flex;width:100%;align-items:center;justify-content:space-between;gap:14px;padding:11px 14px;border:0;background:transparent;color:#26324a;cursor:pointer;text-align:left}
+.analysisProgressHead>span{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650}
+.analysisProgressHead small{color:#6b7280;font-size:12px;font-weight:400}
+.analysisProgressHead i{width:8px;height:8px;border-radius:50%;background:#4f6fe5;box-shadow:0 0 0 4px #4f6fe51a}
+.analysisProgressHead i.pulse{animation:analysisPulse 1.35s ease-in-out infinite}
+.analysisProgressHead i.complete{background:#22a06b;box-shadow:0 0 0 4px #22a06b1a}
+.analysisProgressHead i.failed{background:#d94b4b;box-shadow:0 0 0 4px #d94b4b1a}
+.analysisProgress.hasFailure{background:linear-gradient(135deg,#fff8f8,#fffdf8)}
+.analysisTimeline{display:grid;gap:0;padding:0 14px 12px}
+.analysisStep{position:relative;display:grid;grid-template-columns:15px minmax(0,1fr) auto;gap:8px;min-height:48px;padding:7px 0}
+.analysisStep:after{content:"";position:absolute;left:4px;top:22px;bottom:-9px;width:1px;background:#dbe2ef}
+.analysisStep:last-of-type:after{display:none}
+.analysisStep>i{z-index:1;width:9px;height:9px;margin-top:4px;border:2px solid #9aa8c5;border-radius:50%;background:#fff}
+.analysisStep.completed>i{border-color:#22a06b;background:#22a06b}
+.analysisStep.retrying>i{border-color:#d28b19;background:#fff8e6}
+.analysisStep.failed>i{border-color:#d94b4b;background:#fff0f0}
+.analysisStep>div{display:grid;gap:3px;min-width:0}
+.analysisStep b{color:#283449;font-size:13px;font-weight:620}
+.analysisStep b em{display:inline-flex;margin-left:7px;padding:1px 5px;border:1px solid #dbe4ff;border-radius:999px;color:#526aa6;background:#f5f7ff;font-size:10px;font-style:normal;font-weight:500;vertical-align:1px}
+.analysisStep p{margin:0;color:#667085;font-size:12px;line-height:1.45}
+.analysisStep time{padding-top:2px;color:#98a2b3;font:11px ui-monospace,monospace}
+.tracePlan{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px;margin-top:5px;padding:7px 9px;border-left:2px solid #8ea2ff;background:#f7f9ff;color:#53617a;font-size:11px;line-height:1.5}
+.tracePlan>b{color:#3657c9;font-size:11px;white-space:nowrap}
+.traceFacts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:5px}
+.traceFacts>div{display:grid;gap:2px;padding:7px 8px;border:1px solid #e4e9f2;border-radius:7px;background:#fff}
+.traceFacts span{color:#7b8497;font-size:10px}
+.traceFacts b{color:#344054;font-size:11px;font-weight:580;overflow-wrap:anywhere}
+.traceQuery,.traceError{display:grid;gap:5px;margin-top:5px}
+.traceQuery>b,.traceEvidence>b,.traceError>b{color:#526078;font-size:10px;letter-spacing:.02em}
+.traceQuery pre,.traceError pre{max-height:210px;margin:0;padding:8px 9px;overflow:auto;border:1px solid #e2e8f0;border-radius:7px;color:#344054;background:#f8fafc;font:10.5px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.traceError pre{color:#9b2c2c;background:#fff8f8;border-color:#fecaca}
+.traceEvidence{display:grid;gap:5px;margin-top:5px}
+.traceEvidence>div{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:6px 8px;border:1px solid #dcebe6;border-radius:7px;background:#f5fbf9}
+.traceEvidence span{color:#285f55;font-size:11px;font-weight:600;overflow-wrap:anywhere}
+.traceEvidence small{color:#688078;font-size:10px;text-align:right}
+.analysisBoundary{margin:5px 0 0 23px;padding:7px 9px;border-left:2px solid #c7d2fe;color:#667085;background:#f8faff;font-size:11px;line-height:1.45}
+@keyframes analysisPulse{0%,100%{opacity:.55;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
+@media(max-width:640px){.analysisProgressHead{align-items:flex-start;flex-direction:column;gap:4px}.analysisStep{grid-template-columns:15px minmax(0,1fr)}.analysisStep time{grid-column:2}.analysisBoundary{margin-left:0}.traceFacts{grid-template-columns:1fr}.traceEvidence>div{display:grid}.traceEvidence small{text-align:left}}
