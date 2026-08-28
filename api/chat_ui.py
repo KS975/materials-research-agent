@@ -129,6 +129,7 @@ class ChatUIRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     history: list[HistoryMessage] = Field(default_factory=list, max_length=20)
     attachment_ids: list[str] = Field(default_factory=list, max_length=8)
+    attachment_reference_mode: bool = False
 
 
 class ChatUIResponse(BaseModel):
@@ -539,6 +540,106 @@ def chat_ui(
         "识别问题",
         "正在判断应使用确定性材料能力、数据库探索或其它证据源。",
     )
+
+    # Explicit UI mode: act as a pure DeepSeek attachment Q&A relay. The
+    # parsed attachment body and the user's original question go straight to
+    # the LLM before any business intent, DB or optimization route runs. With
+    # the flag off, all historical routing behavior remains unchanged.
+    if body.attachment_reference_mode:
+        if not body.attachment_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="DeepSeek 附件问答已开启，请先上传 PDF、DOCX 或 XLSX 附件",
+            )
+        if not container.settings.llm_enabled:
+            raise HTTPException(
+                status_code=503,
+                detail="DeepSeek 附件问答需要先启用模型：LLM_ENABLED=true",
+            )
+
+        emit_progress(
+            "deepseek_attachment_passthrough",
+            "running",
+            "向 DeepSeek 提交附件",
+            "正在读取当前附件正文，并与用户问题一并发送给 DeepSeek。",
+            attachment_count=len(body.attachment_ids),
+            detail_items=[{
+                "label": "发送内容",
+                "value": f"当前 Chat 的 {len(body.attachment_ids)} 个附件",
+            }],
+        )
+        try:
+            result = container.current_attachment_skill.answer(
+                message=body.message,
+                attachment_ids=body.attachment_ids,
+                ctx=ctx,
+                reference_mode=True,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"DeepSeek 附件问答失败：{type(exc).__name__}: {exc}",
+            ) from exc
+
+        raw_answer = str(result.get("answer") or "").strip()
+        result = dict(result)
+        result["answer"] = raw_answer
+
+        emit_progress(
+            "deepseek_attachment_passthrough",
+            "completed",
+            "DeepSeek 答案已返回",
+            "已将 DeepSeek 对附件和用户问题的回答直接返回；本轮未进入业务路由。",
+            attachment_count=len(body.attachment_ids),
+            evidence_count=len(result.get("evidence") or []),
+        )
+        return ChatUIResponse(
+            answer=result.get("answer", ""),
+            intent="deepseek_attachment_answer",
+            tool_name=None,
+            tool_args={"attachment_count": len(body.attachment_ids)},
+            data=result,
+            evidence=result.get("evidence", []),
+            warnings=result.get("warnings", []),
+            router="deepseek_attachment_passthrough",
+            reasoning_summary=(
+                "纯附件转接模式：后端将当前附件解析正文和用户原问题直接提交给 DeepSeek，"
+                "答案不经过业务意图、数据库或 T17/T18 处理。"
+            ),
+            routing={
+                "version": "DEEPSEEK-ATTACHMENT-PASSTHROUGH-0.2",
+                "domain": "direct_attachment_qa",
+                "primary_intent": "deepseek_attachment_answer",
+                "secondary_intents": [],
+                "entities": {"attachment_count": len(body.attachment_ids)},
+                "scope": {
+                    "company": "current",
+                    "projects": "attachment_owner_scope",
+                    "data_source": "current_chat_attachments",
+                },
+                "constraints": {
+                    "attachment_only_evidence": True,
+                    "business_intent_bypassed": True,
+                    "database_not_queried": True,
+                    "optimization_engine_not_run": True,
+                    "answer_postprocessed": False,
+                },
+                "context_reference": {"action": "explicit_deepseek_attachment_mode"},
+                "tool_plan": [{
+                    "kind": "llm",
+                    "name": "deepseek_attachment_passthrough",
+                    "args": {"reference_mode": True},
+                    "purpose": "将附件正文与用户问题直接提交给 DeepSeek",
+                }],
+                "needs_clarification": False,
+                "clarification_question": "",
+            },
+        )
+
     # Materials Intent Round 2A is a business-MySQL capability. Explicit and
     # context-resolved material requests must execute before the low-priority
     # imported company-data overview router.

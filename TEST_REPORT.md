@@ -1,13 +1,12 @@
-# Round 2B-2.1.3 测试报告
+# Database Navigator V0.1 测试报告
 
 - Python compileall：通过。
-- 前端进度与重试状态测试：5/5 通过。
+- Dashboard Repository 权限定向验收：3/3 通过。
+- 前端 Dashboard 问题生成测试：3/3 通过。
+- 原实时分析进度测试：5/5 通过。
 - Vite 8.2.1 production build：通过。
-- MySQL + 历史资料联合分析 trace 验收：通过，共产生计划、数据库、知识检索、证据合成 7 个原始事件。
-- Database Explorer 1054 错误 → DeepSeek 修正 → SQL 成功 trace 验收：通过。
-- 普通确定性样品比较 trace 验收：通过。
-- dist 内容检查：包含默认收起标题、处理计划、实际检索词、命中证据、脱敏只读 SQL 和脱敏错误组件。
+- dist 内容检查：包含数据库导航器、Dashboard API 和当前公司权限提示。
+- ZIP 打包前已检查：不包含 `.env`、密钥、`node_modules` 或 `__pycache__`。
 
-说明：当前打包执行环境缺少 FastAPI/pytest 的完整测试依赖，因此未重新执行全部 API pytest；
-已完成 Python 编译、纯前端测试、生产构建和三条独立后端 trace 验收。
-
+当前打包环境缺少 FastAPI、pytest 和 pydantic-settings，未在此环境重新执行完整 API pytest；
+已完成静态编译、Repository 权限验收、前端 Node 测试及生产构建。

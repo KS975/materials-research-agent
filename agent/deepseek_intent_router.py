@@ -46,6 +46,7 @@ _ALLOWED_INTENTS = _ALLOWED_TOOLS | {
     "experiment_series_analysis",
     "data_quality_check",
     "find_samples_multi_condition",
+    "similar_samples",
     "historical_similar_case",
     "analyze_cause",
     "analyze_performance_difference",
@@ -96,6 +97,10 @@ _INTENT_ALIASES = {
     "multi_condition_sample_search": "list_samples_for_analysis",
     "filter_samples": "find_samples_multi_condition",
     "multi_condition_sample_search": "find_samples_multi_condition",
+    "find_similar_samples": "similar_samples",
+    "sample_similarity": "similar_samples",
+    "formula_similarity": "similar_samples",
+    "process_similarity": "similar_samples",
     "sample_compare": "compare_samples",
     "compare_sample": "compare_samples",
     "formula_compare": "formula_difference",
@@ -158,6 +163,7 @@ _TOOL_ALIASES = {
     "experiment_series_analysis": "list_samples_for_analysis",
     "data_quality_check": "list_samples_for_analysis",
     "find_samples_multi_condition": "list_samples_for_analysis",
+    "similar_samples": "list_samples_for_analysis",
 }
 
 _DOMAIN_BY_INTENT = {
@@ -175,6 +181,7 @@ _DOMAIN_BY_INTENT = {
     "experiment_series_analysis": "analyze",
     "data_quality_check": "validate",
     "find_samples_multi_condition": "retrieve",
+    "similar_samples": "analyze",
     "historical_similar_case": "knowledge",
     "analyze_cause": "analyze",
     "analyze_performance_difference": "diagnosis",
@@ -203,6 +210,7 @@ _REQUIRED_ARGS = {
     "performance_rank": ("target_metric",),
     "experiment_series_analysis": ("keyword",),
     "find_samples_multi_condition": ("filters",),
+    "similar_samples": ("identifier",),
     "analyze_cause": ("identifier",),
     "analyze_performance_difference": (
         "left_identifier",
@@ -231,6 +239,7 @@ _EXPECTED_TOOL_BY_INTENT = {
     "experiment_series_analysis": "list_samples_for_analysis",
     "data_quality_check": "list_samples_for_analysis",
     "find_samples_multi_condition": "list_samples_for_analysis",
+    "similar_samples": "list_samples_for_analysis",
     "find_samples": "find_samples",
     "analyze_cause": "get_sample_context",
     "analyze_performance_difference": "compare_samples",
@@ -357,6 +366,13 @@ class DeepSeekIntentRouter:
 - 只生成上述结构化条件；严禁生成 SQL、表名、列名、JOIN、WHERE 或数据库连接信息。实际读取、权限过滤、数值比较、缺失处理和计数均由后端确定性执行。
 - 若输入中的 authorized_material_field_catalog 非空，它是当前用户授权范围内的权威字段目录。section 和 field 必须从目录选择并使用 canonical field 原名：例如目录存在 formula.PC 时，“PC含量”必须输出 field="PC"；目录只在 performance 中存在“成本”时，必须输出 section="performance", field="成本"。不得把“含量/数值/指标”等口语后缀拼进新字段名。
 
+1D) Materials Intent Round 2B-2.1（确定性相似样品）：
+- similar_samples：查找与一个明确参照样品结构化数值最接近的样品；tool_name=list_samples_for_analysis。
+- 参数：identifier；similarity_scope="formula|process|combined"；top_n 默认5，最大20；keyword 默认空字符串。
+- “配方最像/配方相似”使用 formula；“工艺最像/工艺相似”使用 process；未限定或说“综合最像”使用 combined。
+- 与“历史上有没有类似案例”严格区分：历史资料问题仍走 sample_historical_similarity / historical_similar_case，不得走 similar_samples。
+- Router 不计算相似度；字段单位对齐、缺失覆盖、归一化距离和排名全部由后端确定性执行。
+
 2) 性能差异分析：
 - primary_intent=analyze_performance_difference
 - tool_name=compare_samples
@@ -399,6 +415,7 @@ class DeepSeekIntentRouter:
 - 如果历史中能唯一确定样品，可以复用；若有多个候选且无法确定，needs_clarification=true。
 - 不得编造样品 ID、项目 ID、性能指标。
 - “找/筛选/列出冲击强度大于40且成本低于30的样品”“项目115里PC含量大于50%的样品”属于 find_samples_multi_condition，不要降级成 find_samples(keyword)，也不要生成 SQL。
+- “找和3811最像的5个样品/找配方与3811相似的样品”属于 similar_samples，不要降级成 find_samples(keyword)，也不要交给 Database Explorer。
 - 一句话包含多个需求时：primary_intent 表示当前首先要执行/最终落地的主业务意图；其它语义放 secondary_intents。现阶段只有后端已验证的 Tool/Skill 会真正执行。
 - 同一句话明确要求“数据库样品事实 + 历史资料”时，必须用 joint_mysql_knowledge_analysis，不能降级成单一数据源。
 - 有附件且用户明确问“这份/附件/报告/表格/Excel”的内容时，优先走 current attachment。
@@ -407,7 +424,7 @@ class DeepSeekIntentRouter:
 【primary_intent 白名单】
 get_sample_context, get_formula, get_process, get_performance, compare_samples, find_samples,
 sample_full_profile, formula_difference, process_difference, comparability_check,
-performance_rank, experiment_series_analysis, data_quality_check, find_samples_multi_condition, historical_similar_case,
+performance_rank, experiment_series_analysis, data_quality_check, find_samples_multi_condition, similar_samples, historical_similar_case,
 analyze_cause, analyze_performance_difference,
 analyze_current_attachment, ask_current_attachment,
 search_historical_knowledge, sample_historical_similarity, joint_mysql_knowledge_analysis,
@@ -614,6 +631,14 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                     "source_sample_count": field_catalog.get("source_sample_count", 0),
                     "contains_values": False,
                 }
+        elif intent == "similar_samples":
+            scope["data_source"] = "business_mysql"
+            constraints.update({
+                "read_only": True,
+                "deterministic_similarity": True,
+                "exact_field_and_unit_alignment": True,
+                "arbitrary_sql": False,
+            })
         elif intent == "database_explorer":
             scope["data_source"] = "business_mysql"
             constraints.update({
@@ -650,6 +675,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "experiment_series_analysis",
             "data_quality_check",
             "find_samples_multi_condition",
+            "similar_samples",
             "database_explorer",
         }:
             domain = _DOMAIN_BY_INTENT[intent]
@@ -678,6 +704,8 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                 if intent == "database_explorer"
                 else "2B-1.1"
                 if intent == "find_samples_multi_condition"
+                else "2B-2.1"
+                if intent == "similar_samples"
                 else "2.1"
             ),
         )
@@ -700,6 +728,9 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             and len(hints.active_comparison_identifiers) >= 2
         ):
             samples = list(hints.active_comparison_identifiers[:2])
+
+        if RuleIntentRouter._route_similar_samples(text) is not None:
+            return "similar_samples"
 
         if looks_like_multi_condition_request(text):
             return "find_samples_multi_condition"
@@ -836,6 +867,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                 "sample_full_profile",
                 "analyze_cause",
                 "sample_historical_similarity",
+                "similar_samples",
             }:
                 result["identifier"] = new
 
@@ -849,6 +881,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "get_performance",
             "sample_full_profile",
             "analyze_cause",
+            "similar_samples",
         }:
             # Explicit user sample is authoritative over any model extraction.
             if len(current_samples) == 1:
@@ -961,6 +994,18 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             result.setdefault("top_n", int(top_match.group(1)) if top_match else 10)
             result.setdefault("order", "asc" if "最低" in text else "desc")
             result.setdefault("keyword", "")
+
+        if intent == "similar_samples":
+            text = str(message or "")
+            deterministic = RuleIntentRouter._route_similar_samples(text)
+            if deterministic is not None:
+                # Explicit user identifier and requested similarity scope are
+                # authoritative over model guesses.
+                result.update(deterministic.tool_args)
+            else:
+                result.setdefault("similarity_scope", "combined")
+                result.setdefault("top_n", 5)
+                result.setdefault("keyword", "")
 
         if intent == "experiment_series_analysis" and not str(result.get("keyword") or "").strip():
             text = str(message or "")
@@ -1087,6 +1132,13 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "performance_rank": {"target_metric", "keyword", "top_n", "order", "scan_limit"},
             "experiment_series_analysis": {"keyword", "scan_limit"},
             "data_quality_check": {"keyword", "scan_limit"},
+            "similar_samples": {
+                "identifier",
+                "similarity_scope",
+                "top_n",
+                "keyword",
+                "scan_limit",
+            },
             "find_samples_multi_condition": {
                 "filters",
                 "logic",
@@ -1257,6 +1309,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "sample_full_profile",
             "analyze_cause",
             "sample_historical_similarity",
+            "similar_samples",
         }:
             return "你想分析哪个样品？请提供样品 ID 或样品名称。"
         if intent in {
@@ -1280,6 +1333,8 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                 "请明确筛选字段、比较关系和值，例如“冲击强度大于40，"
                 "并且成本低于30”；如果单位会影响判断，也请写出单位。"
             )
+        if intent == "similar_samples":
+            return "你想以哪个样品作为参照？请提供样品 ID 或样品名称。"
         return "当前信息还不足以确定要执行的材料研发操作，请补充样品、指标或分析范围。"
 
     @staticmethod

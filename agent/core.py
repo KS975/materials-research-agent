@@ -86,7 +86,7 @@ class AgentCore:
 - 数值差值、相对变化、配方算术和只能直接引用 Tool Result 中的确定性计算，不得自行重新计算。
 - comparability_check 的缺失测试条件必须表述为“无法确认一致”，不得当作“相同”。
 - 只解释 Tool Result 已支持的事实，不根据常识补齐材料体系或测试标准。
-对于 performance_rank / experiment_series_analysis / data_quality_check / find_samples_multi_condition：
+对于 performance_rank / experiment_series_analysis / data_quality_check / find_samples_multi_condition / similar_samples：
 - 排序、计数、比例、缺失和异常标记只能引用 Tool Result，不得重新计算。
 - find_samples_multi_condition 只能引用后端返回的 filters、matched_sample_count、matched_samples 和 filter_diagnostics；不要自行放宽/增加筛选条件，也不要把未命中写成数据库没有该样品。
 - find_samples_multi_condition 遇到 field_not_found 或 unit_ambiguity 时必须明确停止原因；不得猜字段、猜单位或自行换算后继续筛选。
@@ -101,6 +101,9 @@ class AgentCore:
 - 若结构化 formula 为空但工艺文本包含配比，只能写“未提供可解析的结构化配方，工艺文本含配比描述”，不能笼统写“未提供配方”。
 - performance_rank 必须引用 scanned_sample_count / total_matching_sample_count；正常情况通过分页读取全部匹配记录，scan_truncated=true 时不得声称是全部授权数据的最终排名。
 - 排名按数据库记录进行；同名不同 ID 是不同记录，不得擅自去重。
+- similar_samples 的相似度、字段覆盖率、归一化距离和排名只能引用 Tool Result，不得由模型重算。
+- similar_samples 必须说明所用范围是配方、工艺或综合，并说明这是结构化数值接近度，不代表机理相同、性能等价或因果关系。
+- similar_samples 不得隐藏低字段覆盖率；引用 compared_field_count/reference_field_count，综合模式分别说明配方和工艺分数。
 - 实验系列 sample_count=0 时只能报告未命中和 Tool Result 给出的 similar_names，不得编造系列目的。
 回答使用中文。
 """
@@ -287,6 +290,32 @@ class AgentCore:
                 if result.get("scan_truncated"):
                     lines.append("数据库分页读取未完整结束，当前结果不代表全部授权记录。")
                 return "\n".join(lines)
+
+        if intent == "similar_samples":
+            if status == "insufficient_reference_fields":
+                return "参照样品在所选范围内没有足够的唯一数值字段，暂时无法计算相似度。"
+            if status == "no_comparable_candidates":
+                return "当前授权样品中没有与参照样品共享同名、同单位数值字段的可比候选。"
+            if status == "ok":
+                reference = result.get("reference_sample") or {}
+                scope_label = {
+                    "formula": "配方",
+                    "process": "工艺",
+                    "combined": "配方与工艺综合",
+                }.get(result.get("similarity_scope"), "综合")
+                lines = [
+                    f"按{scope_label}结构化数值计算，与 {reference.get('id')}（{reference.get('name')}）最相似的样品为："
+                ]
+                for index, row in enumerate(result.get("ranking") or [], 1):
+                    sample = row.get("sample") or {}
+                    lines.append(
+                        f"{index}. {sample.get('id')}（{sample.get('name')}）："
+                        f"{row.get('similarity_percent')}%；"
+                        f"共同字段 {row.get('compared_field_count')}/"
+                        f"{row.get('reference_field_count')}"
+                    )
+                lines.append(str(result.get("interpretation_limit") or ""))
+                return "\n".join(line for line in lines if line)
 
         if intent == "performance_rank":
             if status == "unit_mismatch":

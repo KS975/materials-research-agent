@@ -10,6 +10,7 @@ from api.ml_ui import router as ml_ui_router
 from api.optimization_ui import router as optimization_ui_router
 from api.autonomy_ui import router as autonomy_ui_router
 from api.demo_ui import router as demo_ui_router
+from api.dashboard import router as dashboard_router
 from app.config import get_settings
 from app.logging_config import configure_logging
 from api.chat_ui import router as chat_ui_router
@@ -34,3 +35,4 @@ app.include_router(autonomy_ui_router)
 app.include_router(demo_ui_router)
 app.include_router(files_router)
 app.include_router(knowledge_router)
+app.include_router(dashboard_router)

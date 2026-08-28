@@ -19,6 +19,7 @@ import {
 import { getAutonomyStatus, operatorOverride } from "./v030_api";
 import { getMondayDemoStatus } from "./demo_api";
 import { createInitialAnalysisStep, mergeProgressStep } from "./progress";
+import DatabaseNavigator from "./DatabaseNavigator";
 
 const versions=[
   ["V0.1.1","Agent + MySQL","查询 · 对比 · 分析","done"],
@@ -773,12 +774,16 @@ export default function App(){
   const [busy,setBusy]=useState(false);
   const [uploading,setUploading]=useState(false);
   const [attachments,setAttachments]=useState([]);
+  const [attachmentReferenceMode,setAttachmentReferenceMode]=useState(false);
   const [err,setErr]=useState("");
   const [scope,setScope]=useState(getScope);
   const [online,setOnline]=useState(null);
   const [showScope,setShowScope]=useState(false);
+  const [dashboardOpen,setDashboardOpen]=useState(false);
+  const [dashboardSummary,setDashboardSummary]=useState(null);
   const end=useRef(null);
   const fileInput=useRef(null);
+  const composerInput=useRef(null);
 
   useEffect(()=>{health().then(()=>setOnline(true)).catch(()=>setOnline(false));},[]);
   useEffect(()=>{end.current?.scrollIntoView({behavior:"smooth"});},[messages,busy]);
@@ -830,6 +835,7 @@ export default function App(){
   async function removeAttachment(item){
     try{await deleteChatFile(item.attachmentId,scope)}catch(e){console.warn(e)}
     setAttachments(prev=>prev.filter(x=>x.attachmentId!==item.attachmentId));
+    if(attachments.length<=1)setAttachmentReferenceMode(false);
   }
 
   async function sendModelStatus(
@@ -906,6 +912,10 @@ export default function App(){
 
   async function send(value){
     const q=(value??text).trim(); if(!q||busy||uploading)return;
+    if(attachmentReferenceMode&&!attachments.length){
+      setErr("DeepSeek 附件问答已开启，请先上传 PDF、DOCX 或 XLSX 文件。");
+      return;
+    }
     const pendingId=id();
     setText(""); setErr(""); setMessages(x=>[
       ...x,
@@ -918,6 +928,7 @@ export default function App(){
         history,
         scope,
         attachments.map(x=>x.attachmentId),
+        attachmentReferenceMode,
         progress=>setMessages(items=>items.map(item=>
           item.id===pendingId
             ? {...item,progress:mergeProgressStep(item.progress,progress)}
@@ -951,8 +962,9 @@ export default function App(){
     }finally{setBusy(false)}
   }
 
-  function newChat(){setMessages([welcome]);setText("");setErr("");setAttachments([])}
+  function newChat(){setMessages([welcome]);setText("");setErr("");setAttachments([]);setAttachmentReferenceMode(false)}
   function runQuick(item){return item.type==="ml"?sendModelStatus():send(item.text)}
+  function useDashboardPrompt(value){setText(value);setDashboardOpen(false);setTimeout(()=>composerInput.current?.focus(),0)}
 
   return <div className="shell">
     <aside>
@@ -965,7 +977,7 @@ export default function App(){
     </aside>
 
     <main>
-      <header><div><h1>研发对话</h1><p>V0.3 · Autonomous Experiment Orchestration</p></div><div><button className="versionTopBtn active" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>V0.3 · 9036</button><button className="demoModeBtn" disabled={busy||uploading} onClick={sendDemoStatus}>演示模式</button><button className="modelStatusBtn autonomyStatusBtn" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>自主状态</button><button className="modelStatusBtn feedbackStatusBtn" disabled={busy||uploading} onClick={()=>sendFeedbackStatus(MONDAY_DEMO_PROJECTS.feedback)}>V0.2 · 9026</button><button className="modelStatusBtn" disabled={busy||uploading} onClick={()=>sendModelStatus("冲击强度",MONDAY_DEMO_PROJECTS.modeling)}>模型 · 9010</button><button disabled={busy||uploading} onClick={newChat}>新对话</button></div></header>
+      <header><div><h1>研发对话</h1><p>V0.3 · Autonomous Experiment Orchestration</p></div><div><button className="dbNavToggle" onClick={()=>setDashboardOpen(true)}>▣ 数据库浏览{dashboardSummary?` · ${dashboardSummary.sample_count}`:""}</button><button className="versionTopBtn active" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>V0.3 · 9036</button><button className="demoModeBtn" disabled={busy||uploading} onClick={sendDemoStatus}>演示模式</button><button className="modelStatusBtn autonomyStatusBtn" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>自主状态</button><button className="modelStatusBtn feedbackStatusBtn" disabled={busy||uploading} onClick={()=>sendFeedbackStatus(MONDAY_DEMO_PROJECTS.feedback)}>V0.2 · 9026</button><button className="modelStatusBtn" disabled={busy||uploading} onClick={()=>sendModelStatus("冲击强度",MONDAY_DEMO_PROJECTS.modeling)}>模型 · 9010</button><button disabled={busy||uploading} onClick={newChat}>新对话</button></div></header>
       <section className="scroll"><div className="inner">
         {messages.length===1&&<div className="quick"><small>可以试试</small><div>{quick.map(q=><button key={q.text} onClick={()=>runQuick(q)}><span>{q.label}</span><b>{q.text}</b></button>)}</div></div>}
         <div className="messages">{messages.map(m=><Message key={m.id} m={m} scope={scope}/>)}{busy&&!messages.some(m=>m.pending)&&<div className="msg assistant"><div className="avatar"><Logo/></div><div className="msgcol"><small>材数智能体</small><div className="bubble loading">● ● ● <span>正在读取研发证据 / 运行优化算法</span></div></div></div>}</div>
@@ -974,10 +986,12 @@ export default function App(){
 
       <footer>
         {!!attachments.length&&<div className="attachments">{attachments.map(item=><div className="attachmentChip" key={item.attachmentId}><span>附件</span><b>{item.filename}</b><span>{item.pageCount?`${item.pageCount}页`:item.parser} · {item.chunkCount} chunks</span><button title="移除附件" onClick={()=>removeAttachment(item)}>×</button></div>)}</div>}
+        {attachmentReferenceMode&&<div className="attachmentReferenceHint"><b>DeepSeek 附件问答已开启</b><span>附件正文和本轮问题将直接发送给 DeepSeek；不经过业务意图、MySQL 或 T17/T18。</span></div>}
         {uploading&&<div className="uploadState">正在上传并解析附件…</div>}
-        <div className="composer"><input ref={fileInput} type="file" accept=".pdf,.docx,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple hidden onChange={onFilesSelected}/><button className="upload uploadReady" disabled={uploading||busy} onClick={()=>fileInput.current?.click()}>＋ 上传文件 <span>PDF/DOCX/XLSX</span></button><textarea value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}}} placeholder={attachments.length?"问当前附件，例如：分析这份报告":"输入研发问题，例如：查看 V0.3 自主实验状态 / Safety / Crash Resume"}/><button className="send" disabled={!text.trim()||busy||uploading} onClick={()=>send()}>➤</button></div>
+        <div className="composer"><input ref={fileInput} type="file" accept=".pdf,.docx,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple hidden onChange={onFilesSelected}/><button className="upload uploadReady" disabled={uploading||busy} onClick={()=>fileInput.current?.click()}>＋ 上传文件 <span>PDF/DOCX/XLSX</span></button><button type="button" className={`attachmentReferenceToggle ${attachmentReferenceMode?"active":""}`} disabled={uploading||busy||!attachments.length} aria-pressed={attachmentReferenceMode} title={attachments.length?"开启后将附件正文和问题直接交给 DeepSeek":"请先上传附件"} onClick={()=>setAttachmentReferenceMode(value=>!value)}><i/>附件直问</button><textarea ref={composerInput} value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}}} placeholder={attachmentReferenceMode?"直接向 DeepSeek 提问当前附件":attachments.length?"问当前附件，例如：分析这份报告":"输入研发问题，例如：查看 V0.3 自主实验状态 / Safety / Crash Resume"}/><button className="send" disabled={!text.trim()||busy||uploading} onClick={()=>send()}>➤</button></div>
         <p>业务 MySQL = READ ONLY · V0.3 Simulator only · Safety 不可绕过 · Dataset 不覆盖旧版本 · 模型不自动晋级</p>
       </footer>
     </main>
+    <DatabaseNavigator open={dashboardOpen} scope={scope} onClose={()=>setDashboardOpen(false)} onUsePrompt={useDashboardPrompt} onSummary={setDashboardSummary}/>
   </div>
 }

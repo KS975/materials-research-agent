@@ -49,6 +49,10 @@ class RuleIntentRouter:
     def route(self, message: str) -> IntentDecision | None:
         text = message.strip()
 
+        similar_decision = self._route_similar_samples(text)
+        if similar_decision is not None:
+            return similar_decision
+
         if "样品" in text and any(marker in text.lower() for marker in self._rank_markers):
             metric = self.extract_rank_metric(text)
             top_match = re.search(r"(?:前|top)\s*(\d+)", text, re.I)
@@ -195,6 +199,36 @@ class RuleIntentRouter:
             )
 
         return None
+
+    @classmethod
+    def _route_similar_samples(cls, text: str) -> IntentDecision | None:
+        if any(marker in text for marker in ("历史", "以前", "报告", "资料")):
+            return None
+        if not any(marker in text.casefold() for marker in (
+            "最像", "相似样品", "相似样本", "类似样品", "类似样本",
+            "相似的样品", "相似的样本", "类似的样品", "类似的样本",
+            "相近样品", "相近样本", "similar sample",
+        )):
+            return None
+        identifier = cls._extract_explicit_sample_identifier(text)
+        if not identifier:
+            return None
+        scope = (
+            "formula" if "配方" in text
+            else "process" if any(marker in text for marker in ("工艺", "流程", "加工"))
+            else "combined"
+        )
+        top_match = re.search(r"(?:前|top|最像的?)\s*(\d+)", text, re.I)
+        return IntentDecision(
+            "similar_samples",
+            "list_samples_for_analysis",
+            {
+                "identifier": identifier,
+                "similarity_scope": scope,
+                "top_n": int(top_match.group(1)) if top_match else 5,
+                "keyword": "",
+            },
+        )
 
     @classmethod
     def extract_rank_metric(cls, text: str) -> str:

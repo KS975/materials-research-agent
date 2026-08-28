@@ -14,6 +14,7 @@ from data.mysql.explorer import AuthorizedDatabaseExplorer
 from data.mysql.repositories import (
     ArchiveRepository,
     ColumnDefinitionRepository,
+    DashboardRepository,
     ExperimentRepository,
     MaterialRepository,
     ProjectRepository,
@@ -42,6 +43,7 @@ class ApplicationContainer:
         self.projects = ProjectRepository(self.db)
         self.materials = MaterialRepository(self.db)
         self.columns = ColumnDefinitionRepository(self.db)
+        self.dashboard = DashboardRepository(self.db)
         self.archives = ArchiveRepository(self.db)
         self.experiments = ExperimentRepository(self.db)
 

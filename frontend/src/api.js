@@ -42,6 +42,28 @@ function scopeHeaders(scope){
   };
 }
 
+async function dashboardGet(path, params, scope){
+  const query=new URLSearchParams();
+  Object.entries(params||{}).forEach(([key,value])=>{
+    if(value!==undefined&&value!==null&&value!=="")query.set(key,String(value));
+  });
+  const suffix=query.size?`?${query.toString()}`:"";
+  const r=await fetch(`/agent-api/api/v1/dashboard/${path}${suffix}`,{
+    headers:scopeHeaders(scope),
+  });
+  const data=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error(data?.detail||`数据库浏览失败 HTTP ${r.status}`);
+  return data;
+}
+
+export function getDashboardSummary(scope){return dashboardGet("summary",{},scope)}
+export function getDashboardProjects(params,scope){return dashboardGet("projects",params,scope)}
+export function getDashboardSamples({q="",projectId=null,limit=20,offset=0},scope){
+  return dashboardGet("samples",{q,project_id:projectId,limit,offset},scope);
+}
+export function getDashboardSampleDetail(sampleId,scope){return dashboardGet(`samples/${sampleId}`,{},scope)}
+export function getDashboardFields({q="",section="all"},scope){return dashboardGet("fields",{q,section},scope)}
+
 export async function health(){
   const r=await fetch("/agent-api/health");
   if(!r.ok) throw new Error();
@@ -71,7 +93,13 @@ export async function deleteChatFile(attachmentId, scope){
   return data;
 }
 
-export async function chat(message, history, scope, attachmentIds=[]){
+export async function chat(
+  message,
+  history,
+  scope,
+  attachmentIds=[],
+  attachmentReferenceMode=false,
+){
   const r=await fetch("/agent-api/api/v1/chat-ui",{
     method:"POST",
     headers:{"Content-Type":"application/json",...scopeHeaders(scope)},
@@ -79,6 +107,7 @@ export async function chat(message, history, scope, attachmentIds=[]){
       message,
       history:history.slice(-12),
       attachment_ids:attachmentIds,
+      attachment_reference_mode:Boolean(attachmentReferenceMode),
     })
   });
   const data=await r.json().catch(()=>null);
@@ -91,6 +120,7 @@ export async function chatWithProgress(
   history,
   scope,
   attachmentIds=[],
+  attachmentReferenceMode=false,
   onProgress=()=>{},
 ){
   const startedAt=Date.now();
@@ -108,6 +138,7 @@ export async function chatWithProgress(
     message,
     history:history.slice(-12),
     attachment_ids:attachmentIds,
+    attachment_reference_mode:Boolean(attachmentReferenceMode),
   };
   reportClientProgress(
     "stream_transport",
@@ -144,7 +175,13 @@ export async function chatWithProgress(
       "已切换到兼容接口；本轮只能展示前端请求与最终结果记录。",
       {transport:"sync_fallback"},
     );
-    const result=await chat(message,history,scope,attachmentIds);
+    const result=await chat(
+      message,
+      history,
+      scope,
+      attachmentIds,
+      attachmentReferenceMode,
+    );
     reportClientProgress(
       "result_received",
       "completed",
