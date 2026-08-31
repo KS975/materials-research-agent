@@ -23,6 +23,7 @@ from data.mysql.repositories import (
 from llm.factory import create_llm_provider
 from file_processing import UnifiedFileParser
 from runtime.chat_attachments import ChatAttachmentStore
+from runtime.chat_ui_workflow import ChatUIWorkflowStore
 from skills.current_attachment import CurrentAttachmentSkill
 from skills.database_explorer import DatabaseExplorerSkill
 from skills.general_conversation import GeneralConversationFallbackSkill
@@ -98,6 +99,13 @@ class ApplicationContainer:
         self.chat_attachment_store = ChatAttachmentStore(
             settings.chat_upload_dir,
             settings.chat_upload_ttl_minutes,
+        )
+        self.chat_ui_workflow_store = ChatUIWorkflowStore(
+            settings.chat_ui_workflow_dir,
+            max_response_chars=settings.chat_ui_workflow_max_response_chars,
+            checkpoint_retries=settings.chat_ui_workflow_checkpoint_retries,
+            lease_seconds=settings.chat_ui_workflow_lease_seconds,
+            ttl_hours=settings.chat_ui_workflow_ttl_hours,
         )
 
         self.current_attachment_skill = CurrentAttachmentSkill(

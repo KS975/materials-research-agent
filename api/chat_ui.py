@@ -2,18 +2,28 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 
 from agent.deepseek_intent_router import DeepSeekIntentRouter
 from agent.multi_condition import looks_like_multi_condition_request
 from api.chat import resolve_user_context
 from app.container import ApplicationContainer, get_container
+from orchestration.chat_ui_graph import (
+    build_chat_ui_graph,
+    invoke_chat_ui_graph,
+)
+from schemas.chat_ui import ChatUIRequest, ChatUIResponse, HistoryMessage
 from schemas.user_context import UserContext
 from runtime.progress import emit_progress, progress_context
+from runtime.chat_ui_workflow import (
+    ChatUIWorkflowCheckpointError,
+    ChatUIWorkflowConflictError,
+    ChatUIWorkflowNotFoundError,
+    ChatUIWorkflowPermissionError,
+)
 from runtime.v030_ui import (
     V030UIError,
     build_autonomy_overview,
@@ -118,31 +128,6 @@ def _intent_progress_details(intent: str, tool_args: dict[str, Any]) -> list[dic
             continue
         output.append({"label": label, "value": str(value)[:500]})
     return output
-
-
-class HistoryMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=8000)
-
-
-class ChatUIRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=4000)
-    history: list[HistoryMessage] = Field(default_factory=list, max_length=20)
-    attachment_ids: list[str] = Field(default_factory=list, max_length=8)
-    attachment_reference_mode: bool = False
-
-
-class ChatUIResponse(BaseModel):
-    answer: str
-    intent: str
-    tool_name: str | None = None
-    tool_args: dict[str, Any] = Field(default_factory=dict)
-    data: Any = None
-    evidence: list[dict[str, Any]] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    router: str = "deepseek"
-    reasoning_summary: str = ""
-    routing: dict[str, Any] = Field(default_factory=dict)
 
 
 def initial_stream_progress_event() -> dict[str, Any]:
@@ -528,11 +513,112 @@ def _resolve_optimization_project_id(message: str, ctx: UserContext) -> int:
     )
 
 
-@router.post("/chat-ui", response_model=ChatUIResponse)
-def chat_ui(
+def _classify_chat_ui_primary_family(state: dict[str, Any]) -> dict[str, Any]:
+    """Select the first V2 graph family without executing DB/LLM work.
+
+    The order mirrors the protected production dispatcher exactly. All checks
+    here are deterministic and side-effect free; the dispatcher remains the
+    final authority and repeats the same checks before executing a capability.
+    """
+
+    body: ChatUIRequest = state["body"]
+    ctx: UserContext = state["user_context"]
+    container: ApplicationContainer = state["container"]
+
+    if body.attachment_reference_mode:
+        return {
+            "primary_family": "direct_attachment",
+            "deterministic_kind": "deepseek_attachment_passthrough",
+        }
+
+    history = [{"role": x.role, "content": x.content} for x in body.history[-12:]]
+    round2a2_decision = _route_round2a2_database_intent(
+        body.message,
+        container.core.rule_router,
+        history,
+    )
+    if round2a2_decision is not None:
+        return {
+            "primary_family": "deterministic",
+            "deterministic_kind": round2a2_decision.intent,
+        }
+
+    company_decision = _classify_company_real_data_turn(body.message, body.history)
+    if company_data_has_priority(company_decision):
+        return {
+            "primary_family": "deterministic",
+            "deterministic_kind": "company_real_data_status",
+        }
+    if _looks_like_v030_autonomy(body.message):
+        return {
+            "primary_family": "deterministic",
+            "deterministic_kind": "v030_autonomy_status",
+        }
+    if _looks_like_v020_feedback(body.message):
+        return {
+            "primary_family": "deterministic",
+            "deterministic_kind": "v020_feedback_loop_status",
+        }
+    if looks_like_inverse_design(body.message):
+        return {
+            "primary_family": "deterministic",
+            "deterministic_kind": "v014_inverse_design",
+        }
+    if looks_like_next_experiments(body.message):
+        return {
+            "primary_family": "deterministic",
+            "deterministic_kind": "v014_next_experiments",
+        }
+    return {
+        "primary_family": "semantic",
+        "deterministic_kind": "",
+    }
+
+
+def _classify_chat_ui_semantic_family(state: dict[str, Any]) -> dict[str, Any]:
+    """Classify the evidence family from the actual semantic response.
+
+    This runs after the protected dispatcher, so it never invokes DeepSeek a
+    second time and cannot disagree with the response returned to the user.
+    """
+
+    response = state.get("response")
+    if isinstance(response, dict):
+        response = ChatUIResponse.model_validate(response)
+    if not isinstance(response, ChatUIResponse):
+        raise RuntimeError("LangGraph V2 无法识别语义响应")
+
+    intent = str(response.intent or "").strip()
+    router_name = str(response.router or "").strip()
+    if intent == "database_explorer" or router_name == "deepseek_database_explorer":
+        family = "database_explorer"
+    elif intent in {
+        "sample_historical_similarity",
+        "joint_mysql_knowledge_analysis",
+        "search_historical_knowledge",
+        "historical_similar_case",
+    }:
+        family = "rag"
+    elif intent in {
+        "analyze_current_attachment",
+        "ask_current_attachment",
+    }:
+        family = "current_attachment"
+    elif intent in {
+        "general_conversation",
+        "unsupported_future_feature",
+        "clarification_required",
+    }:
+        family = "general_conversation"
+    else:
+        family = "material_tool"
+    return {"semantic_family": family}
+
+
+def _execute_chat_ui_legacy(
     body: ChatUIRequest,
-    ctx: UserContext = Depends(resolve_user_context),
-    container: ApplicationContainer = Depends(get_container),
+    ctx: UserContext,
+    container: ApplicationContainer,
 ):
     emit_progress(
         "intent_routing",
@@ -1408,6 +1494,62 @@ def chat_ui(
         reasoning_summary=summary,
         routing=routing_meta,
     )
+
+
+_chat_ui_graph = build_chat_ui_graph(
+    _execute_chat_ui_legacy,
+    primary_classifier=_classify_chat_ui_primary_family,
+    semantic_classifier=_classify_chat_ui_semantic_family,
+)
+
+
+@router.post("/chat-ui", response_model=ChatUIResponse)
+def chat_ui(
+    body: ChatUIRequest,
+    ctx: UserContext = Depends(resolve_user_context),
+    container: ApplicationContainer = Depends(get_container),
+):
+    """Run the production Chat UI request through LangGraph V3.
+
+    V3 adds scoped checkpoints and explicit pause/resume while preserving the
+    V2 route families and the validated production dispatcher.
+    """
+
+    try:
+        return invoke_chat_ui_graph(
+            _chat_ui_graph,
+            body=body,
+            user_context=ctx,
+            container=container,
+        )
+    except ChatUIWorkflowNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ChatUIWorkflowPermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ChatUIWorkflowConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ChatUIWorkflowCheckpointError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/chat-ui/workflows/{workflow_id}")
+def chat_ui_workflow_status(
+    workflow_id: str,
+    ctx: UserContext = Depends(resolve_user_context),
+    container: ApplicationContainer = Depends(get_container),
+):
+    """Return a scoped, redacted V3 checkpoint status without answer data."""
+
+    try:
+        return container.chat_ui_workflow_store.status(workflow_id, ctx)
+    except ChatUIWorkflowNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ChatUIWorkflowPermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ChatUIWorkflowConflictError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ChatUIWorkflowCheckpointError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/chat-ui/stream")

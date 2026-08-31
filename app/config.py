@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     chat_upload_max_mb: int = 25
     chat_upload_ttl_minutes: int = 180
 
+    # LangGraph V3: durable, scoped Chat UI workflow checkpoints.
+    chat_ui_workflow_dir: str = ".runtime/chat_ui_workflows"
+    chat_ui_workflow_max_response_chars: int = 2_000_000
+    chat_ui_workflow_checkpoint_retries: int = 3
+    chat_ui_workflow_lease_seconds: int = 120
+    chat_ui_workflow_ttl_hours: int = 72
+
     # V0.1.2-B: long-term Knowledge Index / Qdrant
     knowledge_upload_max_mb: int = 50
     embedding_base_url: str = ""
@@ -105,6 +112,22 @@ class Settings(BaseSettings):
         if not 100 <= self.database_explorer_query_timeout_ms <= 120000:
             raise ValueError(
                 "DATABASE_EXPLORER_QUERY_TIMEOUT_MS 必须在 100 到 120000 之间"
+            )
+        if not 100_000 <= self.chat_ui_workflow_max_response_chars <= 10_000_000:
+            raise ValueError(
+                "CHAT_UI_WORKFLOW_MAX_RESPONSE_CHARS 必须在100000到10000000之间"
+            )
+        if not 1 <= self.chat_ui_workflow_checkpoint_retries <= 5:
+            raise ValueError(
+                "CHAT_UI_WORKFLOW_CHECKPOINT_RETRIES 必须在1到5之间"
+            )
+        if not 10 <= self.chat_ui_workflow_lease_seconds <= 3600:
+            raise ValueError(
+                "CHAT_UI_WORKFLOW_LEASE_SECONDS 必须在10到3600之间"
+            )
+        if not 1 <= self.chat_ui_workflow_ttl_hours <= 720:
+            raise ValueError(
+                "CHAT_UI_WORKFLOW_TTL_HOURS 必须在1到720之间"
             )
         return self
 
