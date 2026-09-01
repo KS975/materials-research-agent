@@ -3,9 +3,8 @@ import {
   chatWithProgress,
   deleteChatFile,
   getModelingStatus,
-  getScope,
+  getPlatformSession,
   health,
-  saveScope,
   uploadChatFile,
 } from "./api";
 import {
@@ -45,6 +44,14 @@ const welcome={
 V0.3 UI 已接入自主实验运行态：Protocol、Scheduler、Telemetry、Safety、自动结果回流、多轮闭环与 Crash/Resume；当前仍只连接 Simulator，不代表真实设备验证。`
 };
 const id=()=>Date.now()+"-"+Math.random().toString(16).slice(2);
+const EMPTY_PLATFORM_SCOPE={
+  userId:"",
+  companyId:"",
+  organizationId:"",
+  organizationLevel:"",
+  projectIds:"*",
+  permission_source:"",
+};
 
 function Logo(){return <div className="logo">◇</div>}
 
@@ -776,8 +783,10 @@ export default function App(){
   const [attachments,setAttachments]=useState([]);
   const [attachmentReferenceMode,setAttachmentReferenceMode]=useState(false);
   const [err,setErr]=useState("");
-  const [scope,setScope]=useState(getScope);
+  const [scope,setScope]=useState(EMPTY_PLATFORM_SCOPE);
   const [online,setOnline]=useState(null);
+  const [identityReady,setIdentityReady]=useState(null);
+  const [identityError,setIdentityError]=useState("");
   const [showScope,setShowScope]=useState(false);
   const [dashboardOpen,setDashboardOpen]=useState(false);
   const [dashboardSummary,setDashboardSummary]=useState(null);
@@ -785,11 +794,15 @@ export default function App(){
   const fileInput=useRef(null);
   const composerInput=useRef(null);
 
-  useEffect(()=>{health().then(()=>setOnline(true)).catch(()=>setOnline(false));},[]);
+  useEffect(()=>{
+    health().then(()=>setOnline(true)).catch(()=>setOnline(false));
+    getPlatformSession()
+      .then(value=>{setScope(value);setIdentityReady(true);setIdentityError("")})
+      .catch(error=>{setIdentityReady(false);setIdentityError(String(error?.message||error))});
+  },[]);
   useEffect(()=>{end.current?.scrollIntoView({behavior:"smooth"});},[messages,busy]);
 
   const history=useMemo(()=>messages.filter(x=>x.id!=="welcome").map(x=>({role:x.role,content:x.content})),[messages]);
-  const updateScope=(k,v)=>{const n={...scope,[k]:v};setScope(n);saveScope(n)};
   const currentProjectId=()=>{
     const raw=String(scope.projectIds||"")
       .split(",")
@@ -799,9 +812,9 @@ export default function App(){
     const value=Number(raw);
     return Number.isInteger(value)?value:null;
   };
-  const projectScopeLabel=String(scope.projectIds||"").trim()==="*"
+  const projectScopeLabel=identityReady
     ? "当前公司全部项目"
-    : `Project ${scope.projectIds}`;
+    : identityReady===false?"身份接入失败":"正在读取身份";
 
   function appendUiFailure(label,error){
     const message=String(error?.message||error||"未知错误");
@@ -844,7 +857,7 @@ export default function App(){
   ){
     if(busy||uploading)return;
     const projectId=projectIdOverride||currentProjectId();
-    if(!projectId){setErr("当前 Project IDs 无法解析，请先在左侧权限范围中填写项目号。 ");return;}
+    if(!projectId){setErr("当前操作需要明确项目编号。");return;}
     const q=`检查 Project ${projectId} 的${targetMetric}建模状态`;
     setErr("");
     setMessages(x=>[...x,{id:id(),role:"user",content:q}]);
@@ -861,7 +874,7 @@ export default function App(){
   ){
     if(busy||uploading)return;
     const projectId=projectIdOverride||currentProjectId();
-    if(!projectId){setErr("当前 Project IDs 无法解析，请先在左侧权限范围中填写项目号。");return;}
+    if(!projectId){setErr("当前操作需要明确项目编号。");return;}
     const q=`查看 Project ${projectId} 的 V0.2 闭环状态`;
     setErr("");setMessages(x=>[...x,{id:id(),role:"user",content:q}]);setBusy(true);
     try{
@@ -876,7 +889,7 @@ export default function App(){
   ){
     if(busy||uploading)return;
     const projectId=projectIdOverride||currentProjectId();
-    if(!projectId){setErr("当前 Project IDs 无法解析，请先在左侧权限范围中填写项目号。");return;}
+    if(!projectId){setErr("当前操作需要明确项目编号。");return;}
     const q=`查看 Project ${projectId} 的 V0.3 自主实验状态`;
     setErr("");setMessages(x=>[...x,{id:id(),role:"user",content:q}]);setBusy(true);
     try{
@@ -972,8 +985,8 @@ export default function App(){
       <label className="section">能力版本</label>
       {versions.map(v=><div className={`version ${v[3]}`} key={v[0]}><div className="dot">{v[3]==="on"?"●":v[3]==="done"?"✓":"○"}</div><div><b>{v[0]} {v[3]==="on"&&<em>当前</em>}{v[3]==="done"&&<em>已通过</em>}</b><strong>{v[1]}</strong><span>{v[2]}</span></div></div>)}
       <div className="spacer"/>
-      <div className="scope"><button onClick={()=>setShowScope(!showScope)}><span>开发权限范围<br/><b>{projectScopeLabel}</b></span><i>{showScope?"⌃":"⌄"}</i></button>{showScope&&<div className="scopeFields"><label>User ID<input value={scope.userId} onChange={e=>updateScope("userId",e.target.value)}/></label><label>Company ID<input value={scope.companyId} onChange={e=>updateScope("companyId",e.target.value)}/></label><label>Project IDs<input value={scope.projectIds} placeholder="* = 当前公司全部项目" onChange={e=>updateScope("projectIds",e.target.value)}/></label><p>“*”仅表示当前 Company 下全部 Project；跨公司访问仍被禁止。仅用于 development_header，正式版替换为平台登录态。</p></div>}</div>
-      <div className="status"><i className={online?"ok":"bad"}/><span>{online===null?"检查后端中":online?"后端已连接":"后端未连接"}</span></div>
+      <div className={`scope platformScope ${identityReady===false?"scopeFailed":""}`}><button onClick={()=>setShowScope(!showScope)}><span>平台登录上下文<br/><b>{projectScopeLabel}</b></span><i>{showScope?"⌃":"⌄"}</i></button>{showScope&&<div className="scopeFields platformScopeFields">{identityReady?<><label>User ID<span>{scope.userId||"-"}</span></label><label>Company ID<span>{scope.companyId||"-"}</span></label><label>Organization ID<span>{scope.organizationId||"-"}</span></label><label>Organization Level<span>{scope.organizationLevel??"-"}</span></label><p>身份来自单位平台请求头。Authorization 只用于验证和识别用户，不会在页面显示或保存。</p></>:<p className="scopeIdentityError">{identityError||"正在从后端读取平台身份…"}</p>}</div>}</div>
+      <div className="status"><i className={online&&identityReady?"ok":online===false||identityReady===false?"bad":""}/><span>{online===null?"检查后端中":!online?"后端未连接":identityReady===null?"读取平台身份中":identityReady?"后端与平台身份已连接":"后端已连接 · 身份未接通"}</span></div>
     </aside>
 
     <main>

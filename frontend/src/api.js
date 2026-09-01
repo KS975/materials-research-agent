@@ -1,44 +1,34 @@
-const KEY = "materials-agent-dev-scope";
-const DEFAULT_SCOPE = {
-  userId:"local-test",
-  companyId:"6a4b19f62d0e000027001eb8",
-  projectIds:"*",
-};
-const LEGACY_PROJECT_SCOPES = new Set([
-  "115",
-  "115,9010,9018,9026,9036,930066",
-]);
+// Production identity is supplied by the unit platform/gateway through the
+// request headers. The browser never stores or displays the Bearer token.
+// Vite development keeps a local-only bridge so npm run dev remains usable;
+// these X-* headers are removed from production builds.
+const LOCAL_DEV_HEADERS=import.meta.env.DEV?{
+  "X-User-Id":import.meta.env.VITE_DEV_USER_ID||"local-test",
+  "X-Company-Id":import.meta.env.VITE_DEV_COMPANY_ID||"6a4b19f62d0e000027001eb8",
+  "X-Project-Ids":import.meta.env.VITE_DEV_PROJECT_IDS||"*",
+}:{};
 
-function normalizeProjectScope(value){
-  const raw=String(value??"").trim();
-  const compact=raw.replace(/\s+/g,"");
-  if(!compact || LEGACY_PROJECT_SCOPES.has(compact)) return "*";
-  if(compact.toLowerCase()==="all") return "*";
-  return raw;
+export function apiFetch(url,options={}){
+  return fetch(url,{
+    ...options,
+    credentials:"include",
+    headers:{...LOCAL_DEV_HEADERS,...(options.headers||{})},
+  });
 }
 
-export function getScope(){
-  try {
-    const stored=JSON.parse(localStorage.getItem(KEY)||"{}");
-    const scope={...DEFAULT_SCOPE,...stored};
-    scope.projectIds=normalizeProjectScope(scope.projectIds);
-    // One-time migration from the old demo whitelist to current-company-all.
-    localStorage.setItem(KEY,JSON.stringify(scope));
-    return scope;
-  } catch {
-    return {...DEFAULT_SCOPE};
-  }
-}
-
-export function saveScope(v){
-  localStorage.setItem(KEY,JSON.stringify({...v,projectIds:normalizeProjectScope(v?.projectIds)}));
-}
-
-function scopeHeaders(scope){
+export async function getPlatformSession(){
+  const r=await apiFetch("/agent-api/api/v1/session-context",{
+    headers:{"Accept":"application/json"},
+  });
+  const data=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error(data?.detail||`平台身份读取失败 HTTP ${r.status}`);
   return {
-    "X-User-Id":scope.userId,
-    "X-Company-Id":scope.companyId,
-    "X-Project-Ids":normalizeProjectScope(scope.projectIds),
+    ...data,
+    userId:data.user_id,
+    companyId:data.company_id,
+    organizationId:data.organization_id,
+    organizationLevel:data.organization_level,
+    projectIds:data.project_mode==="company_all_projects"?"*":(data.project_ids||[]).join(","),
   };
 }
 
@@ -48,9 +38,7 @@ async function dashboardGet(path, params, scope){
     if(value!==undefined&&value!==null&&value!=="")query.set(key,String(value));
   });
   const suffix=query.size?`?${query.toString()}`:"";
-  const r=await fetch(`/agent-api/api/v1/dashboard/${path}${suffix}`,{
-    headers:scopeHeaders(scope),
-  });
+  const r=await apiFetch(`/agent-api/api/v1/dashboard/${path}${suffix}`);
   const data=await r.json().catch(()=>null);
   if(!r.ok)throw new Error(data?.detail||`数据库浏览失败 HTTP ${r.status}`);
   return data;
@@ -65,7 +53,7 @@ export function getDashboardSampleDetail(sampleId,scope){return dashboardGet(`sa
 export function getDashboardFields({q="",section="all"},scope){return dashboardGet("fields",{q,section},scope)}
 
 export async function health(){
-  const r=await fetch("/agent-api/health");
+  const r=await apiFetch("/agent-api/health");
   if(!r.ok) throw new Error();
   return r.json();
 }
@@ -73,9 +61,8 @@ export async function health(){
 export async function uploadChatFile(file, scope){
   const form = new FormData();
   form.append("file", file);
-  const r = await fetch("/agent-api/api/v1/files/chat-upload", {
+  const r = await apiFetch("/agent-api/api/v1/files/chat-upload", {
     method:"POST",
-    headers:scopeHeaders(scope),
     body:form,
   });
   const data=await r.json().catch(()=>null);
@@ -84,9 +71,8 @@ export async function uploadChatFile(file, scope){
 }
 
 export async function deleteChatFile(attachmentId, scope){
-  const r = await fetch(`/agent-api/api/v1/files/chat-attachments/${attachmentId}`, {
+  const r = await apiFetch(`/agent-api/api/v1/files/chat-attachments/${attachmentId}`, {
     method:"DELETE",
-    headers:scopeHeaders(scope),
   });
   const data=await r.json().catch(()=>null);
   if(!r.ok) throw new Error(data?.detail||`删除失败 HTTP ${r.status}`);
@@ -100,9 +86,9 @@ export async function chat(
   attachmentIds=[],
   attachmentReferenceMode=false,
 ){
-  const r=await fetch("/agent-api/api/v1/chat-ui",{
+  const r=await apiFetch("/agent-api/api/v1/chat-ui",{
     method:"POST",
-    headers:{"Content-Type":"application/json",...scopeHeaders(scope)},
+    headers:{"Content-Type":"application/json"},
     body:JSON.stringify({
       message,
       history:history.slice(-12),
@@ -148,12 +134,11 @@ export async function chatWithProgress(
   );
   let r;
   try{
-    r=await fetch("/agent-api/api/v1/chat-ui/stream",{
+    r=await apiFetch("/agent-api/api/v1/chat-ui/stream",{
       method:"POST",
       headers:{
         "Content-Type":"application/json",
         "Accept":"text/event-stream",
-        ...scopeHeaders(scope),
       },
       body:JSON.stringify(payload),
     });
@@ -301,9 +286,7 @@ export async function getModelingStatus(projectId, targetMetric, scope){
     project_id:String(projectId),
     target_metric:targetMetric,
   });
-  const r=await fetch(`/agent-api/api/v1/ml-ui/status?${params.toString()}`,{
-    headers:scopeHeaders(scope),
-  });
+  const r=await apiFetch(`/agent-api/api/v1/ml-ui/status?${params.toString()}`);
   const data=await r.json().catch(()=>null);
   if(!r.ok) throw new Error(data?.detail||`建模状态读取失败 HTTP ${r.status}`);
   return data;

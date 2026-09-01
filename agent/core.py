@@ -63,6 +63,11 @@ class AgentCore:
         intent: str,
         tool_result: Any,
     ) -> str:
+        # A simple aggregate should not wait for a second LLM call or give the
+        # model an opportunity to recompute the database result.  The value and
+        # its coverage statement are rendered directly from deterministic data.
+        if intent == "performance_statistics":
+            return self._deterministic_answer(intent, tool_result)
         if not self.llm_enabled:
             return self._deterministic_answer(intent, tool_result)
 
@@ -86,7 +91,7 @@ class AgentCore:
 - 数值差值、相对变化、配方算术和只能直接引用 Tool Result 中的确定性计算，不得自行重新计算。
 - comparability_check 的缺失测试条件必须表述为“无法确认一致”，不得当作“相同”。
 - 只解释 Tool Result 已支持的事实，不根据常识补齐材料体系或测试标准。
-对于 performance_rank / experiment_series_analysis / data_quality_check / find_samples_multi_condition / similar_samples：
+对于 performance_rank / performance_statistics / experiment_series_analysis / data_quality_check / find_samples_multi_condition / similar_samples：
 - 排序、计数、比例、缺失和异常标记只能引用 Tool Result，不得重新计算。
 - find_samples_multi_condition 只能引用后端返回的 filters、matched_sample_count、matched_samples 和 filter_diagnostics；不要自行放宽/增加筛选条件，也不要把未命中写成数据库没有该样品。
 - find_samples_multi_condition 遇到 field_not_found 或 unit_ambiguity 时必须明确停止原因；不得猜字段、猜单位或自行换算后继续筛选。
@@ -100,6 +105,7 @@ class AgentCore:
 - 缺失字段数量只能引用 field_summary.missing_field_count 或 project_groups[*].field_summary.missing_field_count，不得由模型自行数数组后写“约多少项”。
 - 若结构化 formula 为空但工艺文本包含配比，只能写“未提供可解析的结构化配方，工艺文本含配比描述”，不能笼统写“未提供配方”。
 - performance_rank 必须引用 scanned_sample_count / total_matching_sample_count；正常情况通过分页读取全部匹配记录，scan_truncated=true 时不得声称是全部授权数据的最终排名。
+- performance_statistics 的平均值、有效数值数、缺失数、非数值数和单位只能引用后端返回结果；不得自行重算。scan_truncated=true 时只能称为“已读取记录的平均值”，不得称为全部授权样品平均值。
 - 排名按数据库记录进行；同名不同 ID 是不同记录，不得擅自去重。
 - similar_samples 的相似度、字段覆盖率、归一化距离和排名只能引用 Tool Result，不得由模型重算。
 - similar_samples 必须说明所用范围是配方、工艺或综合，并说明这是结构化数值接近度，不代表机理相同、性能等价或因果关系。
@@ -333,6 +339,49 @@ class AgentCore:
             if result.get("scan_truncated"):
                 lines.append("分页读取未完整结束；当前结果只代表已读取记录，不代表全部授权数据的最终排名。")
             return "\n".join(lines)
+
+        if intent == "performance_statistics":
+            metric = str(result.get("target_metric") or "目标性能")
+            if status == "unit_mismatch":
+                units = "、".join(result.get("observed_units") or []) or "存在缺失单位"
+                if result.get("unitless_numeric_count"):
+                    units += "，并含未记录单位的数值"
+                return (
+                    f"无法安全计算{metric}平均值：有效数值记录的单位不一致（{units}）。"
+                    "系统没有混合单位计算。"
+                )
+            if status == "no_numeric_values":
+                available = "、".join(result.get("available_performance_metrics") or [])
+                suffix = f" 当前可见性能字段包括：{available}。" if available else ""
+                return (
+                    f"当前公司和授权项目范围内没有可用于计算{metric}平均值的数值记录。"
+                    + suffix
+                )
+            if status == "ok":
+                statistics = result.get("statistics") or {}
+                unit = str(result.get("unit") or "").strip()
+                scope_text = (
+                    "当前公司和授权项目范围内"
+                    if not result.get("scan_truncated")
+                    else "当前已读取的授权记录中"
+                )
+                lines = [
+                    f"{scope_text}，{metric}的平均值为 "
+                    f"{statistics.get('mean_display')}"
+                    f"{(' ' + unit) if unit else ''}。",
+                    (
+                        f"共扫描 {result.get('scanned_sample_count', 0)} 条样品记录；"
+                        f"其中 {result.get('numeric_sample_count', 0)} 条有效数值参与计算，"
+                        f"{result.get('missing_sample_count', 0)} 条缺失，"
+                        f"{result.get('non_numeric_sample_count', 0)} 条为非数值，"
+                        f"{result.get('ambiguous_sample_count', 0)} 条目标字段不唯一。"
+                    ),
+                ]
+                if result.get("scan_truncated"):
+                    lines.append("数据库分页读取未完整结束，因此该值不代表全部授权样品。")
+                else:
+                    lines.append("数据库分页读取完整；缺失、非数值和字段不唯一的记录未计入平均值。")
+                return "\n".join(lines)
 
         if intent == "experiment_series_analysis" and status == "ok":
             lines = ["【实验系列分析】", f"共 {result.get('sample_count', 0)} 个样品。"]

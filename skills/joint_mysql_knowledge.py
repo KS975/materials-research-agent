@@ -412,6 +412,8 @@ B. HISTORICAL KNOWLEDGE：从当前公司、当前用户授权范围内的 Qdran
                 project_ids=(project_id,),
                 permission_source=ctx.permission_source,
                 all_projects=False,
+                organization_id=ctx.organization_id,
+                organization_level=ctx.organization_level,
             )
             return (
                 scoped_ctx,

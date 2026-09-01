@@ -43,6 +43,7 @@ _ALLOWED_INTENTS = _ALLOWED_TOOLS | {
     "process_difference",
     "comparability_check",
     "performance_rank",
+    "performance_statistics",
     "experiment_series_analysis",
     "data_quality_check",
     "find_samples_multi_condition",
@@ -101,6 +102,9 @@ _INTENT_ALIASES = {
     "sample_similarity": "similar_samples",
     "formula_similarity": "similar_samples",
     "process_similarity": "similar_samples",
+    "metric_stats": "performance_statistics",
+    "performance_stats": "performance_statistics",
+    "performance_average": "performance_statistics",
     "sample_compare": "compare_samples",
     "compare_sample": "compare_samples",
     "formula_compare": "formula_difference",
@@ -160,6 +164,7 @@ _TOOL_ALIASES = {
     "search_samples": "find_samples",
     "sample_search": "find_samples",
     "performance_rank": "list_samples_for_analysis",
+    "performance_statistics": "list_samples_for_analysis",
     "experiment_series_analysis": "list_samples_for_analysis",
     "data_quality_check": "list_samples_for_analysis",
     "find_samples_multi_condition": "list_samples_for_analysis",
@@ -178,6 +183,7 @@ _DOMAIN_BY_INTENT = {
     "process_difference": "compare",
     "comparability_check": "validate",
     "performance_rank": "analyze",
+    "performance_statistics": "analyze",
     "experiment_series_analysis": "analyze",
     "data_quality_check": "validate",
     "find_samples_multi_condition": "retrieve",
@@ -208,6 +214,7 @@ _REQUIRED_ARGS = {
     "process_difference": ("left_identifier", "right_identifier"),
     "comparability_check": ("left_identifier", "right_identifier"),
     "performance_rank": ("target_metric",),
+    "performance_statistics": ("target_metric",),
     "experiment_series_analysis": ("keyword",),
     "find_samples_multi_condition": ("filters",),
     "similar_samples": ("identifier",),
@@ -236,6 +243,7 @@ _EXPECTED_TOOL_BY_INTENT = {
     "process_difference": "compare_samples",
     "comparability_check": "compare_samples",
     "performance_rank": "list_samples_for_analysis",
+    "performance_statistics": "list_samples_for_analysis",
     "experiment_series_analysis": "list_samples_for_analysis",
     "data_quality_check": "list_samples_for_analysis",
     "find_samples_multi_condition": "list_samples_for_analysis",
@@ -343,6 +351,7 @@ class DeepSeekIntentRouter:
 
 1B) Materials Intent Round 2A-2（确定性集合分析）：
 - performance_rank：按明确性能指标对授权范围样品排序；参数 target_metric，可选 keyword/top_n/order；tool_name=list_samples_for_analysis。
+- performance_statistics：计算授权范围样品某个明确性能指标的平均值；参数 target_metric，requested_statistics=["mean"]，keyword 默认空字符串；tool_name=list_samples_for_analysis。缺失值、非数值、单位检查和平均值全部由后端计算。
 - experiment_series_analysis：分析实验系列中的变量、常量和缺失；参数 keyword（如 N20260305）；tool_name=list_samples_for_analysis。
 - data_quality_check：检查授权范围或 keyword 范围内的缺失、重复、非数值和配方记录值算术和；tool_name=list_samples_for_analysis。
 - historical_similar_case：仅检索“以前有没有类似情况/案例”的历史 Knowledge；tool_name=null。若明确针对单一样品，使用 sample_historical_similarity。
@@ -424,7 +433,7 @@ class DeepSeekIntentRouter:
 【primary_intent 白名单】
 get_sample_context, get_formula, get_process, get_performance, compare_samples, find_samples,
 sample_full_profile, formula_difference, process_difference, comparability_check,
-performance_rank, experiment_series_analysis, data_quality_check, find_samples_multi_condition, similar_samples, historical_similar_case,
+performance_rank, performance_statistics, experiment_series_analysis, data_quality_check, find_samples_multi_condition, similar_samples, historical_similar_case,
 analyze_cause, analyze_performance_difference,
 analyze_current_attachment, ask_current_attachment,
 search_historical_knowledge, sample_historical_similarity, joint_mysql_knowledge_analysis,
@@ -672,6 +681,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "process_difference",
             "comparability_check",
             "performance_rank",
+            "performance_statistics",
             "experiment_series_analysis",
             "data_quality_check",
             "find_samples_multi_condition",
@@ -739,6 +749,8 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "最好", "最高", "最低", "排序", "排名", "前几", "top",
         )):
             return "performance_rank"
+        if RuleIntentRouter._route_performance_statistics(text) is not None:
+            return "performance_statistics"
         if any(marker in text for marker in (
             "这一组在研究什么", "这组在研究什么",
             "这一组实验在研究什么", "这组实验在研究什么",
@@ -995,6 +1007,15 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             result.setdefault("order", "asc" if "最低" in text else "desc")
             result.setdefault("keyword", "")
 
+        if intent == "performance_statistics":
+            text = str(message or "")
+            deterministic = RuleIntentRouter._route_performance_statistics(text)
+            if deterministic is not None:
+                result.update(deterministic.tool_args)
+            else:
+                result.setdefault("requested_statistics", ["mean"])
+                result.setdefault("keyword", "")
+
         if intent == "similar_samples":
             text = str(message or "")
             deterministic = RuleIntentRouter._route_similar_samples(text)
@@ -1130,6 +1151,12 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                 "target_metric",
             },
             "performance_rank": {"target_metric", "keyword", "top_n", "order", "scan_limit"},
+            "performance_statistics": {
+                "target_metric",
+                "requested_statistics",
+                "keyword",
+                "scan_limit",
+            },
             "experiment_series_analysis": {"keyword", "scan_limit"},
             "data_quality_check": {"keyword", "scan_limit"},
             "similar_samples": {

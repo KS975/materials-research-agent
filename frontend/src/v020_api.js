@@ -1,17 +1,10 @@
-function scopeHeaders(scope){
-  return {
-    "X-User-Id":scope.userId,
-    "X-Company-Id":scope.companyId,
-    "X-Project-Ids":scope.projectIds,
-  };
-}
+import { apiFetch } from "./api";
 
 async function jsonRequest(url, scope, options={}){
-  const r=await fetch(url,{
+  const r=await apiFetch(url,{
     ...options,
     headers:{
       ...(options.body?{"Content-Type":"application/json"}:{}),
-      ...scopeHeaders(scope),
       ...(options.headers||{}),
     },
   });

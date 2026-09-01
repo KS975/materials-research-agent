@@ -13,6 +13,10 @@ class UserContext:
     # company. Company scope remains mandatory and is still enforced by every
     # business-MySQL repository.
     all_projects: bool = False
+    # Platform request context. Retained for ownership/auditing, but not
+    # interpreted as project permissions until MatCloud defines that mapping.
+    organization_id: str | None = None
+    organization_level: str | None = None
 
     def can_access_project(self, project_id: int | None) -> bool:
         if project_id is None:

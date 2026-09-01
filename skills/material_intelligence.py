@@ -31,6 +31,7 @@ class MaterialIntelligenceSkill:
         "process_difference",
         "comparability_check",
         "performance_rank",
+        "performance_statistics",
         "experiment_series_analysis",
         "data_quality_check",
         "find_samples_multi_condition",
@@ -138,6 +139,7 @@ class MaterialIntelligenceSkill:
 
         if intent in {
             "performance_rank",
+            "performance_statistics",
             "experiment_series_analysis",
             "data_quality_check",
             "find_samples_multi_condition",
@@ -234,6 +236,28 @@ class MaterialIntelligenceSkill:
                         {"label": "指标", "value": str(tool_args.get("target_metric") or "-")},
                         {"label": "排序方向", "value": str(tool_args.get("order") or "desc")},
                         {"label": "排名结果", "value": f"{len(result.get('ranking') or [])} 条"},
+                    ],
+                )
+                return result
+            if intent == "performance_statistics":
+                result = self._performance_statistics(
+                    source,
+                    target_metric=str(tool_args.get("target_metric") or "").strip(),
+                )
+                mean_value = (result.get("statistics") or {}).get("mean_display")
+                emit_progress(
+                    "deterministic_calculation",
+                    "completed",
+                    "性能平均值计算完成",
+                    (
+                        f"已对 {result.get('numeric_sample_count', 0)} 条有效"
+                        f"{tool_args.get('target_metric')}记录计算平均值。"
+                    ),
+                    detail_items=[
+                        {"label": "指标", "value": str(tool_args.get("target_metric") or "-")},
+                        {"label": "有效数值", "value": f"{result.get('numeric_sample_count', 0)} 条"},
+                        {"label": "缺失记录", "value": f"{result.get('missing_sample_count', 0)} 条"},
+                        {"label": "平均值", "value": str(mean_value if mean_value is not None else "未计算")},
                     ],
                 )
                 return result
@@ -707,6 +731,116 @@ class MaterialIntelligenceSkill:
             "scan_truncated": bool(source.get("scan_truncated", False)),
             "ranking_basis": "按数据库样品记录排名；相同样品名称的不同 ID 不会自动合并。",
             "calculation_policy": "排序由后端 Decimal 确定性计算；不同单位不会混排。",
+            "evidence": source.get("evidence", []),
+            "warnings": source.get("warnings", []),
+        }
+
+    @classmethod
+    def _performance_statistics(
+        cls,
+        source: dict[str, Any],
+        *,
+        target_metric: str,
+    ) -> dict[str, Any]:
+        values: list[Decimal] = []
+        missing_samples: list[dict[str, Any]] = []
+        non_numeric_samples: list[dict[str, Any]] = []
+        ambiguous_samples: list[dict[str, Any]] = []
+        observed_units: set[str] = set()
+        unitless_numeric_count = 0
+        available_metrics: set[str] = set()
+
+        for item in source.get("samples") or []:
+            sample = item.get("sample") or {}
+            performance = item.get("performance") or []
+            for field in performance:
+                name = str(field.get("name") or field.get("raw_key") or "").strip()
+                if name:
+                    available_metrics.add(name)
+            matches = [
+                field
+                for field in performance
+                if str(field.get("name") or field.get("raw_key") or "").strip()
+                == target_metric
+            ]
+            if not matches:
+                missing_samples.append({"sample": sample, "reason": "目标性能未记录"})
+                continue
+            if len(matches) != 1:
+                ambiguous_samples.append({"sample": sample, "reason": "目标性能记录不唯一"})
+                continue
+            field = matches[0]
+            if cls._series_value_is_missing(field.get("value")):
+                missing_samples.append({"sample": sample, "reason": "目标性能值缺失"})
+                continue
+            value = cls._to_decimal(field.get("value"))
+            if value is None:
+                non_numeric_samples.append({"sample": sample, "reason": "目标性能不是数值"})
+                continue
+            unit = str(field.get("unit") or "").strip()
+            if unit:
+                observed_units.add(unit)
+            else:
+                unitless_numeric_count += 1
+            values.append(value)
+
+        unit_mismatch = len(observed_units) > 1 or (
+            bool(observed_units) and unitless_numeric_count > 0
+        )
+        statistics: dict[str, Any] = {}
+        if values and not unit_mismatch:
+            total = sum(values, Decimal("0"))
+            mean = total / Decimal(len(values))
+            mean_display = format(mean.quantize(Decimal("0.0001")), "f")
+            mean_display = mean_display.rstrip("0").rstrip(".") or "0"
+            statistics = {
+                "mean": str(mean),
+                "mean_display": mean_display,
+                "sum": str(total),
+            }
+
+        if unit_mismatch:
+            status = "unit_mismatch"
+        elif not values:
+            status = "no_numeric_values"
+        else:
+            status = "ok"
+
+        return {
+            "status": status,
+            "analysis_type": "performance_statistics",
+            "target_metric": target_metric,
+            "requested_statistics": ["mean"],
+            "statistics": statistics,
+            "unit": next(iter(observed_units)) if len(observed_units) == 1 else None,
+            "observed_units": sorted(observed_units),
+            "unitless_numeric_count": unitless_numeric_count,
+            "numeric_sample_count": len(values),
+            "missing_sample_count": len(missing_samples),
+            "non_numeric_sample_count": len(non_numeric_samples),
+            "ambiguous_sample_count": len(ambiguous_samples),
+            "excluded_sample_count": (
+                len(missing_samples)
+                + len(non_numeric_samples)
+                + len(ambiguous_samples)
+            ),
+            "missing_samples": missing_samples,
+            "non_numeric_samples": non_numeric_samples,
+            "ambiguous_samples": ambiguous_samples,
+            "available_performance_metrics": sorted(available_metrics),
+            "scanned_sample_count": source.get("count", 0),
+            "total_matching_sample_count": source.get(
+                "total_matches", source.get("count", 0)
+            ),
+            "scan_limit": source.get("scan_limit"),
+            "scan_page_size": source.get("scan_page_size", 500),
+            "scan_page_count": source.get("scan_page_count", 1),
+            "scan_complete": bool(source.get("scan_complete", True)),
+            "scan_truncated": bool(source.get("scan_truncated", False)),
+            "calculation_policy": (
+                "平均值由后端 Decimal 对有效数值记录确定性计算；缺失、非数值和"
+                "重复目标字段不参与计算；不同单位或已知/缺失单位混合时停止计算。"
+            ),
             "evidence": source.get("evidence", []),
             "warnings": source.get("warnings", []),
         }

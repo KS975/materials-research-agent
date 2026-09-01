@@ -40,6 +40,7 @@ class RuleIntentRouter:
         "两者", "二者", "它们", "刚才比较的两个", "前面比较的两个",
     )
     _rank_markers = ("最好", "最高", "最低", "排序", "排名", "前几", "top")
+    _mean_markers = ("平均值", "平均数", "均值", "平均多少", "平均大概多少")
     _rank_request_prefix = re.compile(
         r"^(?:(?:请|麻烦)\s*)?"
         r"(?:给我|请给我|帮我找|帮我查|帮我|查一下|查询一下|"
@@ -52,6 +53,10 @@ class RuleIntentRouter:
         similar_decision = self._route_similar_samples(text)
         if similar_decision is not None:
             return similar_decision
+
+        statistics_decision = self._route_performance_statistics(text)
+        if statistics_decision is not None:
+            return statistics_decision
 
         if "样品" in text and any(marker in text.lower() for marker in self._rank_markers):
             metric = self.extract_rank_metric(text)
@@ -199,6 +204,56 @@ class RuleIntentRouter:
             )
 
         return None
+
+    @classmethod
+    def _route_performance_statistics(cls, text: str) -> IntentDecision | None:
+        """Route an explicit collection mean to deterministic business MySQL.
+
+        This intentionally handles only mean/average requests for now.  Other
+        descriptive statistics remain separate future intents so a vague
+        request cannot silently trigger calculations the user did not ask for.
+        """
+        value = str(text or "").strip()
+        if not any(marker in value for marker in cls._mean_markers):
+            return None
+        metric = cls.extract_statistics_metric(value)
+        if not metric:
+            return None
+        return IntentDecision(
+            "performance_statistics",
+            "list_samples_for_analysis",
+            {
+                "target_metric": metric,
+                "requested_statistics": ["mean"],
+                "keyword": "",
+            },
+        )
+
+    @classmethod
+    def extract_statistics_metric(cls, text: str) -> str:
+        value = str(text or "").strip()
+        value = re.sub(
+            r"^(?:(?:请|麻烦|帮我|请帮我|我想知道|请问)\s*)+",
+            "",
+            value,
+        ).strip()
+        value = re.sub(
+            r"^(?:(?:当前|现在|目前)(?:公司|授权范围内)?(?:的)?\s*)?"
+            r"(?:(?:所有|全部|全体|这些)\s*)?(?:样品|样本)(?:的)?\s*",
+            "",
+            value,
+        ).strip()
+        marker_pattern = "|".join(
+            re.escape(marker)
+            for marker in sorted(cls._mean_markers, key=len, reverse=True)
+        )
+        value = re.sub(
+            rf"(?:的)?(?:{marker_pattern}).*$",
+            "",
+            value,
+        ).strip()
+        value = re.sub(r"^(?:所有|全部)(?:样品|样本)?(?:的)?\s*", "", value)
+        return value.strip("的 ，,。？?")
 
     @classmethod
     def _route_similar_samples(cls, text: str) -> IntentDecision | None:

@@ -1,10 +1,12 @@
 // Keep the default request same-origin with the Vite frontend.
 // frontend/vite.config.js proxies /api -> http://127.0.0.1:8000,
 // matching the existing V0.2/V0.3 API clients and avoiding browser CORS.
+import { apiFetch } from "./api";
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/agent-api";
 
 export async function getMondayDemoStatus(){
-  const r=await fetch(`${API_BASE}/api/v1/demo-ui/status`);
+  const r=await apiFetch(`${API_BASE}/api/v1/demo-ui/status`);
   const body=await r.json().catch(()=>({}));
   if(!r.ok){
     if(r.status===404){

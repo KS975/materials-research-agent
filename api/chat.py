@@ -19,6 +19,21 @@ def resolve_user_context(
     return adapter.resolve(request)
 
 
+@router.get("/session-context")
+def session_context(ctx: UserContext = Depends(resolve_user_context)):
+    """Return the safe, resolved platform context; never return the token."""
+
+    return {
+        "user_id": ctx.user_id,
+        "company_id": ctx.company_id,
+        "organization_id": ctx.organization_id,
+        "organization_level": ctx.organization_level,
+        "permission_source": ctx.permission_source,
+        "project_mode": "company_all_projects" if ctx.all_projects else "project_list",
+        "project_ids": list(ctx.project_ids),
+    }
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(
     body: ChatRequest,

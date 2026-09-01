@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     business_db_read_timeout: int = 30
 
     permission_mode: Literal["development_header", "platform"] = "development_header"
+    # ``platform`` mode accepts identity/scope only from an upstream gateway
+    # that has already authenticated the Bearer token. The adapter decodes the
+    # JWT payload solely to obtain a stable user identifier; it does not verify
+    # the signature itself, so production must opt in explicitly.
+    platform_trust_forwarded_headers: bool = False
+    platform_jwt_user_claims: str = "userId,user_id,sub,id"
 
     llm_enabled: bool = False
     llm_base_url: str = ""

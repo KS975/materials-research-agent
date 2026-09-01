@@ -8,16 +8,17 @@ Current local integration mode:
 
 ```text
 PERMISSION_MODE=development_header
-X-User-Id
-X-Company-Id
-X-Project-Ids
+Local development still supports X-User-Id / X-Company-Id / X-Project-Ids.
+The unit deployment uses authorization / company-id / organization-id /
+organization-level through PlatformPermissionAdapter.
 ```
 
 This is explicitly a development compatibility adapter, not a replacement permission system.
 
 Before V0.1.1 release:
 - confirm the real Token/User Context transfer;
-- implement `PlatformPermissionAdapter`;
+- connect the unit gateway's real JWT signature validation before enabling
+  `PLATFORM_TRUST_FORWARDED_HEADERS=true`;
 - verify project visibility with real users;
 - disable `development_header` in production.
 
