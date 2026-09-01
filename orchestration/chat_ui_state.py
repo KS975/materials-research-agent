@@ -31,6 +31,8 @@ class ChatUIWorkflowState(TypedDict, total=False):
     attachment_meta: list[dict[str, Any]]
     database_explorer_enabled: bool
     intent: str
+    skill_name: str
+    skill_plan: dict[str, Any]
     tool_name: str | None
     tool_args: dict[str, Any]
     router_name: str

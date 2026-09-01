@@ -539,11 +539,31 @@ def _classify_chat_ui_primary_family(state: dict[str, Any]) -> dict[str, Any]:
     ctx: UserContext = state["user_context"]
     container: ApplicationContainer = state["container"]
 
-    if body.attachment_reference_mode:
+    def with_skill(
+        *,
+        primary_family: str,
+        intent: str,
+        tool_name: str | None,
+        tool_args: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        plan = container.scenario_composer.compose(
+            intent=intent,
+            tool_name=tool_name,
+            tool_args=tool_args or {},
+        )
         return {
-            "primary_family": "direct_attachment",
-            "deterministic_kind": "deepseek_attachment_passthrough",
+            "primary_family": primary_family,
+            "deterministic_kind": intent,
+            "skill_name": plan.primary_skill,
+            "skill_plan": plan.to_dict(),
         }
+
+    if body.attachment_reference_mode:
+        return with_skill(
+            primary_family="direct_attachment",
+            intent="ask_current_attachment",
+            tool_name=None,
+        )
 
     history = [{"role": x.role, "content": x.content} for x in body.history[-12:]]
     round2a2_decision = _route_round2a2_database_intent(
@@ -552,37 +572,44 @@ def _classify_chat_ui_primary_family(state: dict[str, Any]) -> dict[str, Any]:
         history,
     )
     if round2a2_decision is not None:
-        return {
-            "primary_family": "deterministic",
-            "deterministic_kind": round2a2_decision.intent,
-        }
+        return with_skill(
+            primary_family="deterministic",
+            intent=round2a2_decision.intent,
+            tool_name=round2a2_decision.tool_name,
+            tool_args=round2a2_decision.tool_args,
+        )
 
     company_decision = _classify_company_real_data_turn(body.message, body.history)
     if company_data_has_priority(company_decision):
-        return {
-            "primary_family": "deterministic",
-            "deterministic_kind": "company_real_data_status",
-        }
+        return with_skill(
+            primary_family="deterministic",
+            intent="company_real_data_status",
+            tool_name="company_real_data_runtime",
+        )
     if _looks_like_v030_autonomy(body.message):
-        return {
-            "primary_family": "deterministic",
-            "deterministic_kind": "v030_autonomy_status",
-        }
+        return with_skill(
+            primary_family="deterministic",
+            intent="v030_autonomy_status",
+            tool_name="v030_autonomy_runtime",
+        )
     if _looks_like_v020_feedback(body.message):
-        return {
-            "primary_family": "deterministic",
-            "deterministic_kind": "v020_feedback_loop_status",
-        }
+        return with_skill(
+            primary_family="deterministic",
+            intent="v020_feedback_loop_status",
+            tool_name="v020_campaign_runtime",
+        )
     if looks_like_inverse_design(body.message):
-        return {
-            "primary_family": "deterministic",
-            "deterministic_kind": "v014_inverse_design",
-        }
+        return with_skill(
+            primary_family="deterministic",
+            intent="v014_inverse_design",
+            tool_name="inverse_design_engine",
+        )
     if looks_like_next_experiments(body.message):
-        return {
-            "primary_family": "deterministic",
-            "deterministic_kind": "v014_next_experiments",
-        }
+        return with_skill(
+            primary_family="deterministic",
+            intent="v014_next_experiments",
+            tool_name="gaussian_process_bo",
+        )
     return {
         "primary_family": "semantic",
         "deterministic_kind": "",
@@ -828,7 +855,37 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     planned_intent = "clarification_required" if needs_clarification else intent
-    semantic_family = _semantic_family_for_intent(planned_intent, router_name)
+    planned_tool_name = None if needs_clarification else tool_name
+    planned_tool_args = tool_args
+    try:
+        scenario_plan = container.scenario_composer.compose(
+            intent=planned_intent,
+            tool_name=planned_tool_name,
+            tool_args=planned_tool_args,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Skill 编排失败：{exc}",
+        ) from exc
+    semantic_family = scenario_plan.executor_family
+    if semantic_family not in {
+        "database_explorer",
+        "rag",
+        "current_attachment",
+        "general_conversation",
+        "material_tool",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "当前语义请求选择了尚未接入 Chat UI 的 Skill 执行器："
+                f"{semantic_family}"
+            ),
+        )
+    routing_meta = dict(routing_meta)
+    routing_meta["scenario_plan"] = scenario_plan.to_dict()
+    routing_meta["skill_name"] = scenario_plan.primary_skill
     family_labels = {
         "database_explorer": "授权数据库探索",
         "rag": "历史知识与联合分析",
@@ -837,19 +894,30 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
         "material_tool": "确定性材料工具",
     }
     emit_progress(
-        "semantic_plan",
+        "skill_composition",
         "completed",
-        "执行路线已确定",
-        f"LangGraph 将进入“{family_labels[semantic_family]}”执行节点。",
+        "Skill 编排完成",
+        (
+            f"已选择 {scenario_plan.steps[0].skill_display_name}，"
+            f"执行 operation={planned_intent}。"
+        ),
         intent=intent,
         semantic_family=semantic_family,
+        skill_name=scenario_plan.primary_skill,
         detail_items=[
-            {"label": "语义执行分支", "value": family_labels[semantic_family]},
-            {"label": "业务意图", "value": str(intent)},
+            {"label": "Skill", "value": scenario_plan.steps[0].skill_display_name},
+            {"label": "Operation", "value": str(planned_intent)},
+            {"label": "执行节点", "value": family_labels[semantic_family]},
+            {
+                "label": "固定 Workflow",
+                "value": " → ".join(scenario_plan.steps[0].workflow),
+            },
         ],
     )
     return {
         "semantic_family": semantic_family,
+        "skill_name": scenario_plan.primary_skill,
+        "skill_plan": scenario_plan.to_dict(),
         "history": history,
         "attachment_meta": attachment_meta,
         "database_explorer_enabled": database_explorer_enabled,
@@ -878,7 +946,35 @@ def _semantic_state(state: dict[str, Any]):
     )
 
 
+def _validate_semantic_skill(state: dict[str, Any]) -> None:
+    """Re-validate the checkpointed Skill plan at the execution boundary."""
+    container: ApplicationContainer = state["container"]
+    planned_intent = (
+        "clarification_required"
+        if state.get("needs_clarification")
+        else str(state.get("intent") or "")
+    )
+    planned_tool = None if state.get("needs_clarification") else state.get("tool_name")
+    container.skill_registry.validate_dispatch(
+        intent=planned_intent,
+        tool_name=planned_tool,
+        tool_args=dict(state.get("tool_args") or {}),
+        expected_skill=str(state.get("skill_name") or ""),
+    )
+
+
+def _validate_semantic_skill_output(
+    state: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    container: ApplicationContainer = state["container"]
+    container.skill_registry.get(str(state.get("skill_name") or "")).validate_output(
+        result
+    )
+
+
 def _execute_semantic_current_attachment(state: dict[str, Any]) -> ChatUIResponse:
+    _validate_semantic_skill(state)
     body, ctx, container, intent, _, _, router_name, summary, routing_meta = (
         _semantic_state(state)
     )
@@ -901,6 +997,7 @@ def _execute_semantic_current_attachment(state: dict[str, Any]) -> ChatUIRespons
             status_code=500,
             detail=f"当前附件分析失败：{type(exc).__name__}: {exc}",
         ) from exc
+    _validate_semantic_skill_output(state, result)
     return ChatUIResponse(
         answer=result.get("answer", ""),
         intent=intent,
@@ -916,6 +1013,7 @@ def _execute_semantic_current_attachment(state: dict[str, Any]) -> ChatUIRespons
 
 
 def _execute_semantic_rag(state: dict[str, Any]) -> ChatUIResponse:
+    _validate_semantic_skill(state)
     body, ctx, container, intent, _, tool_args, router_name, summary, routing_meta = (
         _semantic_state(state)
     )
@@ -980,6 +1078,7 @@ def _execute_semantic_rag(state: dict[str, Any]) -> ChatUIResponse:
     else:
         raise HTTPException(400, f"RAG 执行节点收到不支持的意图：{intent or '-'}")
 
+    _validate_semantic_skill_output(state, result)
     return ChatUIResponse(
         answer=result.get("answer", ""),
         intent=intent,
@@ -995,6 +1094,7 @@ def _execute_semantic_rag(state: dict[str, Any]) -> ChatUIResponse:
 
 
 def _execute_semantic_database_explorer(state: dict[str, Any]) -> ChatUIResponse:
+    _validate_semantic_skill(state)
     body, ctx, container, intent, _, _, _, summary, routing_meta = _semantic_state(state)
     database_explorer_skill = getattr(container, "database_explorer_skill", None)
     enabled = bool(
@@ -1021,6 +1121,7 @@ def _execute_semantic_database_explorer(state: dict[str, Any]) -> ChatUIResponse
             status_code=500,
             detail=f"Database Explorer 执行失败：{type(exc).__name__}: {exc}",
         ) from exc
+    _validate_semantic_skill_output(state, result)
     return ChatUIResponse(
         answer=result.get("answer", ""),
         intent=intent,
@@ -1038,6 +1139,7 @@ def _execute_semantic_database_explorer(state: dict[str, Any]) -> ChatUIResponse
 
 
 def _execute_semantic_general_conversation(state: dict[str, Any]) -> ChatUIResponse:
+    _validate_semantic_skill(state)
     body, _, container, intent, _, tool_args, router_name, summary, routing_meta = (
         _semantic_state(state)
     )
@@ -1072,6 +1174,7 @@ def _execute_semantic_general_conversation(state: dict[str, Any]) -> ChatUIRespo
             status_code=502,
             detail=f"DeepSeek 通用回答失败：{type(exc).__name__}: {exc}",
         ) from exc
+    _validate_semantic_skill_output(state, result)
     return ChatUIResponse(
         answer=result.get("answer", ""),
         intent=intent,
@@ -1091,6 +1194,7 @@ def _execute_semantic_general_conversation(state: dict[str, Any]) -> ChatUIRespo
 
 
 def _execute_semantic_material_tool(state: dict[str, Any]) -> ChatUIResponse:
+    _validate_semantic_skill(state)
     body, ctx, container, intent, tool_name, tool_args, router_name, summary, routing_meta = (
         _semantic_state(state)
     )

@@ -5,6 +5,7 @@ from functools import lru_cache
 
 from agent.core import AgentCore
 from agent.service import MaterialsAgentService
+from agent.scenario_composer import ScenarioWorkflowComposer
 from agent.tool_registry import ToolRegistry
 from agent.tools import MaterialsTools
 from app.config import Settings, get_settings
@@ -31,6 +32,7 @@ from skills.general_conversation import GeneralConversationFallbackSkill
 from skills.historical_knowledge import HistoricalKnowledgeRAGSkill
 from skills.joint_mysql_knowledge import JointMySQLKnowledgeAnalysisSkill
 from skills.sample_historical_similarity import SampleHistoricalSimilaritySkill
+from skills.catalog import build_default_skill_registry
 from knowledge import OpenAICompatibleEmbeddingProvider, QdrantKnowledgeRepository
 from knowledge.file_ingestion import KnowledgeFileIngestionService
 from runtime.store import create_runtime_store
@@ -79,6 +81,12 @@ class ApplicationContainer:
             "读取当前公司/项目授权范围内实际出现的材料字段名称、类别和单位；不返回字段值",
             self.tools.get_material_field_catalog,
         )
+
+        # Unified delivery architecture: fine-grained intents are compatibility
+        # operation names.  Scenario Composer selects an atomic Skill contract,
+        # whose Tool allow-list is enforced before any execution.
+        self.skill_registry = build_default_skill_registry()
+        self.scenario_composer = ScenarioWorkflowComposer(self.skill_registry)
 
         self.llm = create_llm_provider(settings)
         self.database_explorer = AuthorizedDatabaseExplorer(self.db)
@@ -159,6 +167,8 @@ class ApplicationContainer:
             registry=self.registry,
             llm=self.llm,
             llm_enabled=settings.llm_enabled,
+            skill_registry=self.skill_registry,
+            scenario_composer=self.scenario_composer,
         )
         self.runtime = create_runtime_store(settings)
         self.agent = MaterialsAgentService(self.core, self.runtime)

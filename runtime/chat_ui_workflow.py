@@ -187,6 +187,8 @@ class ChatUIWorkflowStore:
                 "semantic_intent": "",
                 "semantic_router": "",
                 "semantic_tool": "",
+                "skill_name": "",
+                "skill_plan": {},
                 "resume_count": 0,
                 "created_at": now,
                 "updated_at": now,
@@ -223,6 +225,8 @@ class ChatUIWorkflowStore:
             data["semantic_intent"] = str(state.get("intent") or "")[:200]
             data["semantic_router"] = str(state.get("router_name") or "")[:200]
             data["semantic_tool"] = str(state.get("tool_name") or "")[:200]
+            data["skill_name"] = str(state.get("skill_name") or "")[:200]
+            data["skill_plan"] = _jsonable(dict(state.get("skill_plan") or {}))
             data["last_error"] = None
             if response is not None:
                 try:
@@ -256,6 +260,8 @@ class ChatUIWorkflowStore:
             data["stage"] = "primary_classified"
             data["primary_family"] = str(state.get("primary_family") or "")
             data["deterministic_kind"] = str(state.get("deterministic_kind") or "")
+            data["skill_name"] = str(state.get("skill_name") or "")[:200]
+            data["skill_plan"] = _jsonable(dict(state.get("skill_plan") or {}))
             self._event(data, "WORKFLOW_PAUSED", {"after": "classify_primary"})
             self._write(path, data)
 
@@ -317,6 +323,8 @@ class ChatUIWorkflowStore:
             "semantic_intent": data.get("semantic_intent"),
             "semantic_router": data.get("semantic_router"),
             "semantic_tool": data.get("semantic_tool"),
+            "skill_name": data.get("skill_name"),
+            "skill_plan": deepcopy(data.get("skill_plan") or {}),
             "resume_count": data.get("resume_count", 0),
             "response_checkpointed": bool(data.get("execution_response")),
             "last_error": deepcopy(data.get("last_error")),

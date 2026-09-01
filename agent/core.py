@@ -4,6 +4,8 @@ import json
 from typing import Any
 
 from agent.router import LLMIntentRouter, RuleIntentRouter
+from agent.scenario_composer import ScenarioWorkflowComposer
+from agent.skill_registry import SkillRegistry
 from agent.tool_registry import ToolRegistry
 from llm.base import LLMProvider
 from schemas.user_context import UserContext
@@ -19,19 +21,38 @@ class AgentCore:
         registry: ToolRegistry,
         llm: LLMProvider,
         llm_enabled: bool,
+        skill_registry: SkillRegistry | None = None,
+        scenario_composer: ScenarioWorkflowComposer | None = None,
     ):
         self.registry = registry
         self.llm = llm
         self.llm_enabled = llm_enabled
+        if skill_registry is None:
+            from skills.catalog import build_default_skill_registry
+
+            skill_registry = build_default_skill_registry()
+        self.skill_registry = skill_registry
+        self.scenario_composer = (
+            scenario_composer or ScenarioWorkflowComposer(skill_registry)
+        )
         self.rule_router = RuleIntentRouter()
         self.llm_router = LLMIntentRouter(llm)
         self.material_intelligence_skill = MaterialIntelligenceSkill(registry)
-        self.skills = [
-            DataQuerySkill(registry),
-            ComparisonSkill(registry),
-            AnalysisSkill(registry),
-            self.material_intelligence_skill,
-        ]
+        data_query = DataQuerySkill(registry)
+        comparison = ComparisonSkill(registry)
+        analysis = AnalysisSkill(registry)
+        # Runtime handlers remain small and deterministic.  Selection is now
+        # constrained by the declarative Skill Registry instead of iterating
+        # every handler globally for a matching legacy intent.
+        self.skill_handlers = {
+            "knowledge_qa": [
+                data_query,
+                comparison,
+                analysis,
+                self.material_intelligence_skill,
+            ],
+            "data_governance": [data_query, self.material_intelligence_skill],
+        }
 
     def route(self, message: str):
         decision = self.rule_router.route(message)
@@ -50,12 +71,29 @@ class AgentCore:
         tool_args: dict[str, Any],
         ctx: UserContext,
     ):
-        for skill in self.skills:
-            if skill.can_handle(intent):
-                if isinstance(skill, MaterialIntelligenceSkill):
-                    return skill.execute_intent(intent, tool_name, dict(tool_args), ctx)
-                return skill.execute(tool_name, tool_args, ctx)
-        raise ValueError(f"没有 Skill 可以处理 intent={intent}")
+        plan = self.scenario_composer.compose(
+            intent=intent,
+            tool_name=tool_name,
+            tool_args=tool_args,
+        )
+        handlers = self.skill_handlers.get(plan.primary_skill, [])
+        for handler in handlers:
+            if handler.can_handle(intent):
+                if isinstance(handler, MaterialIntelligenceSkill):
+                    result = handler.execute_intent(
+                        intent,
+                        tool_name,
+                        dict(tool_args),
+                        ctx,
+                    )
+                else:
+                    result = handler.execute(tool_name, tool_args, ctx)
+                self.skill_registry.get(plan.primary_skill).validate_output(result)
+                return result
+        raise ValueError(
+            "Skill 已注册但没有运行处理器："
+            f"skill={plan.primary_skill}, operation={intent}"
+        )
 
     def answer(
         self,

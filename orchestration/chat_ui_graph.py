@@ -251,6 +251,9 @@ def build_chat_ui_graph(
         else:
             raise RuntimeError("LangGraph Chat UI 未生成有效响应")
         routing = dict(validated.routing or {})
+        if state.get("skill_plan"):
+            routing["scenario_plan"] = dict(state["skill_plan"])
+            routing["skill_name"] = str(state.get("skill_name") or "")
         public_status = (
             "PAUSED"
             if state.get("workflow_status") == "PAUSED"

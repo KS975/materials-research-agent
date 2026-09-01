@@ -1,17 +1,42 @@
-# Chat History V0.1 本地完整增量
+# Skill Architecture V1 本地增量
 
-本包已经合并“单位平台四请求头身份接入 V0.1”和“JSON 历史会话 V0.1”。
-将包内文件按相同相对路径覆盖到当前项目，不要删除其他目录，也不要用
-`.env.example` 覆盖你自己的 `.env`。
+## 覆盖
 
-本地 `.env`：
+在项目根目录解压并覆盖同名文件。不要删除原目录中的其它文件。
 
-```env
-PERMISSION_MODE=development_header
-PLATFORM_TRUST_FORWARDED_HEADERS=false
-CHAT_HISTORY_DIR=.runtime/chat_history
-CHAT_HISTORY_MAX_MESSAGES=400
+本包不包含也不会覆盖：
+
+- `.env`
+- `.runtime/chat_history`
+- 业务数据库配置
+- 前端源码或 `dist`
+
+## 启动前验证
+
+```powershell
+python -m pytest -q tests/unit/test_skill_registry_v1.py
+python -m pytest -q tests/unit/test_chat_ui_langgraph_v4.py
+python -m pytest -q tests/unit/test_material_intelligence_round2a1.py
 ```
 
-覆盖后重启后端和前端。发送一轮对话后，点击页面顶部“历史”进行验收。
+启动后检查：
 
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/skills
+```
+
+平台身份请求头模式下，该接口需要携带现有的 Authorization、company-id、
+organization-id、organization-level；本地开发模式继续使用现有开发身份配置。
+
+## 验收问题
+
+```text
+查看3811的完整信息
+所有样品的冲击强度平均值是多少
+找项目115里PC含量大于50%、注塑温度高于70℃的样品
+3811历史上有没有类似情况
+找和3811最像的5个样品
+```
+
+展开“查询与分析详情”后，应看到 `Skill 编排完成`，并显示 Skill、Operation、
+执行节点和固定 Workflow。

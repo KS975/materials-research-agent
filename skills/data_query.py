@@ -11,6 +11,7 @@ class DataQuerySkill:
         "get_process",
         "get_performance",
         "find_samples",
+        "list_samples_for_analysis",
     }
 
     def __init__(self, registry: ToolRegistry):
