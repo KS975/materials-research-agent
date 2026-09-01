@@ -590,29 +590,544 @@ def _classify_chat_ui_semantic_family(state: dict[str, Any]) -> dict[str, Any]:
 
     intent = str(response.intent or "").strip()
     router_name = str(response.router or "").strip()
+    return {"semantic_family": _semantic_family_for_intent(intent, router_name)}
+
+
+def _semantic_family_for_intent(intent: str, router_name: str = "") -> str:
     if intent == "database_explorer" or router_name == "deepseek_database_explorer":
-        family = "database_explorer"
-    elif intent in {
+        return "database_explorer"
+    if intent in {
         "sample_historical_similarity",
         "joint_mysql_knowledge_analysis",
         "search_historical_knowledge",
         "historical_similar_case",
     }:
-        family = "rag"
-    elif intent in {
+        return "rag"
+    if intent in {
         "analyze_current_attachment",
         "ask_current_attachment",
     }:
-        family = "current_attachment"
-    elif intent in {
+        return "current_attachment"
+    if intent in {
         "general_conversation",
         "unsupported_future_feature",
         "clarification_required",
     }:
-        family = "general_conversation"
+        return "general_conversation"
+    return "material_tool"
+
+
+def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
+    """Run the V4 DeepSeek semantic planner exactly once.
+
+    This node may inspect authorized field names, but it does not execute the
+    selected material/RAG/database capability. Its JSON-safe result becomes
+    native LangGraph state and selects one of five execution nodes.
+    """
+
+    body: ChatUIRequest = state["body"]
+    ctx: UserContext = state["user_context"]
+    container: ApplicationContainer = state["container"]
+
+    if not container.settings.llm_enabled:
+        raise HTTPException(503, "请先在后端 .env 启用并配置 DeepSeek：LLM_ENABLED=true")
+
+    history = [{"role": x.role, "content": x.content} for x in body.history[-12:]]
+    attachment_meta = []
+    for attachment_id in body.attachment_ids:
+        try:
+            item = container.chat_attachment_store.get(attachment_id, ctx)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        attachment_meta.append(
+            {
+                "attachment_id": item.attachment_id,
+                "filename": item.filename,
+                "parser": item.parser,
+                "page_count": item.page_count,
+            }
+        )
+
+    field_catalog = None
+    if looks_like_multi_condition_request(body.message):
+        emit_progress(
+            "schema_loading",
+            "running",
+            "读取授权字段目录",
+            "正在读取当前权限范围内实际存在的字段名称和单位。",
+        )
+        try:
+            field_catalog = (
+                container.core.material_intelligence_skill.get_field_catalog(ctx)
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Round 2B-1.1 授权字段目录读取失败："
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            ) from exc
+        if not isinstance(field_catalog, dict) or field_catalog.get("status") != "ok":
+            raise HTTPException(
+                status_code=500,
+                detail="Round 2B-1.1 授权字段目录不完整，已停止 Schema-Aware 路由。",
+            )
+        emit_progress(
+            "schema_loading",
+            "completed",
+            "字段目录已加载",
+            f"已加载 {field_catalog.get('total_field_count', 0)} 个授权字段定义。",
+            field_count=field_catalog.get("total_field_count", 0),
+        )
+
+    engine = DeepSeekIntentRouter(container.llm)
+    database_explorer_skill = getattr(
+        container,
+        "database_explorer_skill",
+        None,
+    )
+    database_explorer_enabled = bool(
+        database_explorer_skill is not None
+        and getattr(database_explorer_skill, "enabled", False)
+    )
+    routing_meta: dict[str, Any] = {}
+    needs_clarification = False
+    clarification_question = ""
+
+    try:
+        emit_progress(
+            "intent_routing",
+            "running",
+            "DeepSeek 语义路由",
+            "正在结合当前问题和对话上下文提取业务意图。",
+        )
+        decision = engine.route(
+            body.message,
+            history,
+            attachment_meta,
+            field_catalog=field_catalog,
+            database_explorer_enabled=database_explorer_enabled,
+            database_explorer_mode=str(
+                getattr(database_explorer_skill, "mode", "off")
+            ),
+        )
+        router_name = "deepseek"
+        summary = decision.reasoning_summary
+        intent, tool_name, tool_args = decision.intent, decision.tool_name, decision.tool_args
+        routing_meta = decision.to_routing_meta()
+        needs_clarification = decision.needs_clarification
+        clarification_question = decision.clarification_question
+        emit_progress(
+            "intent_routing",
+            "completed",
+            "问题理解完成",
+            (
+                f"已识别为“{_INTENT_PROGRESS_NAMES.get(intent, intent)}”。"
+                + (f" {summary}" if summary else "")
+            ),
+            intent=intent,
+            detail_items=_intent_progress_details(intent, tool_args),
+            plan_summary=summary,
+        )
+    except Exception as exc:
+        if _looks_like_joint_mysql_knowledge(body.message):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "已识别为 MySQL + 历史资料联合分析请求，但 DeepSeek 参数提取失败："
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            ) from exc
+        if _looks_like_historical_knowledge(body.message):
+            intent, tool_name, tool_args = "search_historical_knowledge", None, {}
+            router_name = "knowledge_fallback"
+            summary = "DeepSeek 路由失败，按明确的历史知识检索请求处理。"
+        else:
+            fallback = container.core.rule_router.route(body.message)
+            if fallback is None:
+                if body.attachment_ids:
+                    intent, tool_name, tool_args = "ask_current_attachment", None, {}
+                    router_name = "attachment_fallback"
+                    summary = "DeepSeek 路由失败，按当前 Chat 附件问题处理。"
+                elif (
+                    database_explorer_enabled
+                    and _looks_like_unmatched_database_question(body.message)
+                ):
+                    intent, tool_name, tool_args = "database_explorer", None, {}
+                    router_name = "database_explorer_fail_safe"
+                    summary = (
+                        "DeepSeek JSON 意图路由失败，但当前问题明确要求业务数据库事实；"
+                        "转入授权只读 Database Explorer。"
+                    )
+                else:
+                    intent, tool_name, tool_args = "general_conversation", None, {}
+                    router_name = "deepseek_answer_fallback"
+                    summary = (
+                        "DeepSeek JSON 意图路由失败，转入无 Tool 的受约束通用回答；"
+                        "本轮不得声称使用数据库、附件或历史知识证据。"
+                    )
+            else:
+                intent, tool_name, tool_args = (
+                    fallback.intent,
+                    fallback.tool_name,
+                    fallback.tool_args,
+                )
+                router_name = "rule_fallback"
+                summary = "DeepSeek 路由失败，使用 V0.1.1 规则路由兜底。"
+
+    tool_args = dict(tool_args or {})
+    if not routing_meta:
+        is_database_explorer = intent == "database_explorer"
+        routing_meta = {
+            "version": "DBE-0.1" if is_database_explorer else "fallback",
+            "domain": (
+                "retrieve"
+                if is_database_explorer or tool_name is not None
+                else "conversation"
+            ),
+            "primary_intent": intent,
+            "secondary_intents": [],
+            "entities": {},
+            "scope": {"company": "current", "projects": "authorized"},
+            "constraints": ({
+                "read_only": True,
+                "authorized_virtual_sources_only": True,
+                "bounded_sql_retry": True,
+            } if is_database_explorer else {}),
+            "context_reference": {"action": "fallback"},
+            "tool_plan": ([{
+                "kind": "tool",
+                "name": tool_name,
+                "args": dict(tool_args),
+                "purpose": "fallback execution",
+            }] if tool_name else ([{
+                "kind": "skill",
+                "name": "database_explorer",
+                "args": {},
+                "purpose": "授权只读数据库探索兜底",
+            }] if is_database_explorer else [])),
+            "needs_clarification": False,
+            "clarification_question": "",
+        }
+
+    planned_intent = "clarification_required" if needs_clarification else intent
+    semantic_family = _semantic_family_for_intent(planned_intent, router_name)
+    family_labels = {
+        "database_explorer": "授权数据库探索",
+        "rag": "历史知识与联合分析",
+        "current_attachment": "当前附件问答",
+        "general_conversation": "通用回答或澄清",
+        "material_tool": "确定性材料工具",
+    }
+    emit_progress(
+        "semantic_plan",
+        "completed",
+        "执行路线已确定",
+        f"LangGraph 将进入“{family_labels[semantic_family]}”执行节点。",
+        intent=intent,
+        semantic_family=semantic_family,
+        detail_items=[
+            {"label": "语义执行分支", "value": family_labels[semantic_family]},
+            {"label": "业务意图", "value": str(intent)},
+        ],
+    )
+    return {
+        "semantic_family": semantic_family,
+        "history": history,
+        "attachment_meta": attachment_meta,
+        "database_explorer_enabled": database_explorer_enabled,
+        "intent": intent,
+        "tool_name": tool_name,
+        "tool_args": tool_args,
+        "router_name": router_name,
+        "reasoning_summary": summary,
+        "routing_meta": dict(routing_meta),
+        "needs_clarification": bool(needs_clarification),
+        "clarification_question": str(clarification_question or ""),
+    }
+
+
+def _semantic_state(state: dict[str, Any]):
+    return (
+        state["body"],
+        state["user_context"],
+        state["container"],
+        str(state.get("intent") or ""),
+        state.get("tool_name"),
+        dict(state.get("tool_args") or {}),
+        str(state.get("router_name") or "deepseek"),
+        str(state.get("reasoning_summary") or ""),
+        dict(state.get("routing_meta") or {}),
+    )
+
+
+def _execute_semantic_current_attachment(state: dict[str, Any]) -> ChatUIResponse:
+    body, ctx, container, intent, _, _, router_name, summary, routing_meta = (
+        _semantic_state(state)
+    )
+    if intent not in {"analyze_current_attachment", "ask_current_attachment"}:
+        raise HTTPException(400, f"附件执行节点收到不支持的意图：{intent or '-'}")
+    if not body.attachment_ids:
+        raise HTTPException(status_code=400, detail="请先上传 PDF、DOCX 或 XLSX 附件")
+    try:
+        result = container.current_attachment_skill.answer(
+            message=body.message,
+            attachment_ids=body.attachment_ids,
+            ctx=ctx,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"当前附件分析失败：{type(exc).__name__}: {exc}",
+        ) from exc
+    return ChatUIResponse(
+        answer=result.get("answer", ""),
+        intent=intent,
+        tool_name=None,
+        tool_args={},
+        data=result,
+        evidence=result.get("evidence", []),
+        warnings=result.get("warnings", []),
+        router=router_name,
+        reasoning_summary=summary,
+        routing=routing_meta,
+    )
+
+
+def _execute_semantic_rag(state: dict[str, Any]) -> ChatUIResponse:
+    body, ctx, container, intent, _, tool_args, router_name, summary, routing_meta = (
+        _semantic_state(state)
+    )
+    if intent == "sample_historical_similarity":
+        args = _resolve_sample_history_args(tool_args, ctx)
+        try:
+            result = container.sample_historical_similarity_skill.answer(
+                message=body.message,
+                ctx=ctx,
+                **args,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"样品 + 历史资料相似分析失败：{type(exc).__name__}: {exc}",
+            ) from exc
+        response_args = args
+    elif intent == "joint_mysql_knowledge_analysis":
+        args = _resolve_joint_args(tool_args, ctx)
+        try:
+            result = container.joint_mysql_knowledge_skill.answer(
+                message=body.message,
+                ctx=ctx,
+                **args,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"MySQL + 历史资料联合分析失败：{type(exc).__name__}: {exc}",
+            ) from exc
+        response_args = args
+    elif intent in {"search_historical_knowledge", "historical_similar_case"}:
+        project_id = _resolve_historical_project_id(tool_args, ctx)
+        history_query = str(tool_args.get("history_query") or "").strip()
+        try:
+            result = container.historical_knowledge_skill.answer(
+                message=(history_query or body.message),
+                project_id=project_id,
+                ctx=ctx,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"历史知识 RAG 失败：{type(exc).__name__}: {exc}",
+            ) from exc
+        response_args = {
+            "project_id": project_id,
+            "history_query": history_query,
+        }
     else:
-        family = "material_tool"
-    return {"semantic_family": family}
+        raise HTTPException(400, f"RAG 执行节点收到不支持的意图：{intent or '-'}")
+
+    return ChatUIResponse(
+        answer=result.get("answer", ""),
+        intent=intent,
+        tool_name=None,
+        tool_args=response_args,
+        data=result,
+        evidence=result.get("evidence", []),
+        warnings=result.get("warnings", []),
+        router=router_name,
+        reasoning_summary=summary,
+        routing=routing_meta,
+    )
+
+
+def _execute_semantic_database_explorer(state: dict[str, Any]) -> ChatUIResponse:
+    body, ctx, container, intent, _, _, _, summary, routing_meta = _semantic_state(state)
+    database_explorer_skill = getattr(container, "database_explorer_skill", None)
+    enabled = bool(
+        state.get("database_explorer_enabled")
+        and database_explorer_skill is not None
+        and getattr(database_explorer_skill, "enabled", False)
+    )
+    if intent != "database_explorer":
+        raise HTTPException(400, f"数据库探索节点收到不支持的意图：{intent or '-'}")
+    if not enabled:
+        raise HTTPException(status_code=503, detail="Database Explorer 当前未启用。")
+    try:
+        result = database_explorer_skill.answer(
+            message=body.message,
+            history=list(state.get("history") or []),
+            ctx=ctx,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database Explorer 执行失败：{type(exc).__name__}: {exc}",
+        ) from exc
+    return ChatUIResponse(
+        answer=result.get("answer", ""),
+        intent=intent,
+        tool_name="database_explorer",
+        tool_args={},
+        data=result,
+        evidence=result.get("evidence", []),
+        warnings=result.get("warnings", []),
+        router="deepseek_database_explorer",
+        reasoning_summary=(
+            summary or "未命中高精度意图，转入授权只读 Database Explorer。"
+        ),
+        routing=routing_meta,
+    )
+
+
+def _execute_semantic_general_conversation(state: dict[str, Any]) -> ChatUIResponse:
+    body, _, container, intent, _, tool_args, router_name, summary, routing_meta = (
+        _semantic_state(state)
+    )
+    if state.get("needs_clarification"):
+        return ChatUIResponse(
+            answer=(
+                str(state.get("clarification_question") or "").strip()
+                or "当前信息不足，请补充样品、指标或分析范围。"
+            ),
+            intent="clarification_required",
+            tool_name=None,
+            tool_args=tool_args,
+            data={
+                "requested_intent": intent,
+                "needs_clarification": True,
+            },
+            evidence=[],
+            warnings=[],
+            router=router_name,
+            reasoning_summary=summary,
+            routing=routing_meta,
+        )
+    if intent not in {"general_conversation", "unsupported_future_feature"}:
+        raise HTTPException(400, f"通用回答节点收到不支持的意图：{intent or '-'}")
+    try:
+        result = container.general_conversation_skill.answer(
+            message=body.message,
+            history=list(state.get("history") or []),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"DeepSeek 通用回答失败：{type(exc).__name__}: {exc}",
+        ) from exc
+    return ChatUIResponse(
+        answer=result.get("answer", ""),
+        intent=intent,
+        tool_name=None,
+        tool_args={},
+        data=result,
+        evidence=[],
+        warnings=result.get("warnings", []),
+        router=(
+            "deepseek_general_answer"
+            if router_name == "deepseek"
+            else router_name
+        ),
+        reasoning_summary=summary,
+        routing=routing_meta,
+    )
+
+
+def _execute_semantic_material_tool(state: dict[str, Any]) -> ChatUIResponse:
+    body, ctx, container, intent, tool_name, tool_args, router_name, summary, routing_meta = (
+        _semantic_state(state)
+    )
+    if tool_name is None:
+        raise HTTPException(400, "已识别意图，但没有可执行 Tool")
+    try:
+        emit_progress(
+            "tool_execution",
+            "running",
+            "执行材料工具",
+            f"正在执行只读工具：{tool_name}。",
+            intent=intent,
+        )
+        result = container.core.execute(intent, tool_name, tool_args, ctx)
+        emit_progress(
+            "tool_execution",
+            "completed",
+            "材料工具执行完成",
+            "结构化数据库证据已返回。",
+            intent=intent,
+        )
+        emit_progress(
+            "answer_generation",
+            "running",
+            "组织回答",
+            "正在将结构化事实转换为中文回答。",
+        )
+        answer = container.core.answer(body.message, intent, result)
+        emit_progress(
+            "answer_generation",
+            "completed",
+            "回答已生成",
+            "最终回答已依据本轮工具证据生成。",
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"Agent 执行失败：{type(exc).__name__}: {exc}") from exc
+
+    evidence = result.get("evidence", []) if isinstance(result, dict) else []
+    warnings = result.get("warnings", []) if isinstance(result, dict) else []
+    return ChatUIResponse(
+        answer=answer,
+        intent=intent,
+        tool_name=tool_name,
+        tool_args=tool_args,
+        data=result,
+        evidence=evidence,
+        warnings=warnings,
+        router=router_name,
+        reasoning_summary=summary,
+        routing=routing_meta,
+    )
 
 
 def _execute_chat_ui_legacy(
@@ -1499,7 +2014,14 @@ def _execute_chat_ui_legacy(
 _chat_ui_graph = build_chat_ui_graph(
     _execute_chat_ui_legacy,
     primary_classifier=_classify_chat_ui_primary_family,
-    semantic_classifier=_classify_chat_ui_semantic_family,
+    semantic_planner=_plan_chat_ui_semantic,
+    semantic_executors={
+        "database_explorer": _execute_semantic_database_explorer,
+        "rag": _execute_semantic_rag,
+        "current_attachment": _execute_semantic_current_attachment,
+        "general_conversation": _execute_semantic_general_conversation,
+        "material_tool": _execute_semantic_material_tool,
+    },
 )
 
 
@@ -1509,10 +2031,10 @@ def chat_ui(
     ctx: UserContext = Depends(resolve_user_context),
     container: ApplicationContainer = Depends(get_container),
 ):
-    """Run the production Chat UI request through LangGraph V3.
+    """Run the production Chat UI request through LangGraph V4.
 
-    V3 adds scoped checkpoints and explicit pause/resume while preserving the
-    V2 route families and the validated production dispatcher.
+    V4 keeps V3 checkpoints and moves semantic planning plus the five semantic
+    execution families into native graph nodes.
     """
 
     try:
@@ -1538,7 +2060,7 @@ def chat_ui_workflow_status(
     ctx: UserContext = Depends(resolve_user_context),
     container: ApplicationContainer = Depends(get_container),
 ):
-    """Return a scoped, redacted V3 checkpoint status without answer data."""
+    """Return a scoped, redacted V4 checkpoint status without answer data."""
 
     try:
         return container.chat_ui_workflow_store.status(workflow_id, ctx)

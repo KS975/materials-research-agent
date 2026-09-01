@@ -17,7 +17,7 @@ from schemas.chat_ui import ChatUIRequest, ChatUIResponse
 from schemas.user_context import UserContext
 
 
-WORKFLOW_SCHEMA_VERSION = 3
+WORKFLOW_SCHEMA_VERSION = 4
 WORKFLOW_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{7,63}")
 
 
@@ -182,6 +182,9 @@ class ChatUIWorkflowStore:
                 "primary_family": "",
                 "deterministic_kind": "",
                 "semantic_family": "",
+                "semantic_intent": "",
+                "semantic_router": "",
+                "semantic_tool": "",
                 "resume_count": 0,
                 "created_at": now,
                 "updated_at": now,
@@ -215,6 +218,9 @@ class ChatUIWorkflowStore:
             data["primary_family"] = str(state.get("primary_family") or "")
             data["deterministic_kind"] = str(state.get("deterministic_kind") or "")
             data["semantic_family"] = str(state.get("semantic_family") or "")
+            data["semantic_intent"] = str(state.get("intent") or "")[:200]
+            data["semantic_router"] = str(state.get("router_name") or "")[:200]
+            data["semantic_tool"] = str(state.get("tool_name") or "")[:200]
             data["last_error"] = None
             if response is not None:
                 try:
@@ -306,6 +312,9 @@ class ChatUIWorkflowStore:
             "primary_family": data.get("primary_family"),
             "deterministic_kind": data.get("deterministic_kind"),
             "semantic_family": data.get("semantic_family"),
+            "semantic_intent": data.get("semantic_intent"),
+            "semantic_router": data.get("semantic_router"),
+            "semantic_tool": data.get("semantic_tool"),
             "resume_count": data.get("resume_count", 0),
             "response_checkpointed": bool(data.get("execution_response")),
             "last_error": deepcopy(data.get("last_error")),
