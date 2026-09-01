@@ -1,0 +1,18 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+node_modules
+frontend/node_modules
+*.log
+
+# 不把真实凭证烘进 image。
+# docker compose 通过 env_file 注入 .env。
+.env
+
+# runtime 推荐通过 volume 挂载，
+# 避免容器重建后状态丢失。
+.runtime

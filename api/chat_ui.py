@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from agent.deepseek_intent_router import DeepSeekIntentRouter
@@ -15,7 +16,12 @@ from orchestration.chat_ui_graph import (
     build_chat_ui_graph,
     invoke_chat_ui_graph,
 )
-from schemas.chat_ui import ChatUIRequest, ChatUIResponse, HistoryMessage
+from schemas.chat_ui import (
+    ChatHistoryRenameRequest,
+    ChatUIRequest,
+    ChatUIResponse,
+    HistoryMessage,
+)
 from schemas.user_context import UserContext
 from runtime.progress import emit_progress, progress_context
 from runtime.chat_ui_workflow import (
@@ -23,6 +29,12 @@ from runtime.chat_ui_workflow import (
     ChatUIWorkflowConflictError,
     ChatUIWorkflowNotFoundError,
     ChatUIWorkflowPermissionError,
+)
+from runtime.chat_history import (
+    ChatHistoryError,
+    ChatHistoryNotFoundError,
+    ChatHistoryPermissionError,
+    ChatHistoryValidationError,
 )
 from runtime.v030_ui import (
     V030UIError,
@@ -2039,8 +2051,15 @@ def chat_ui(
     execution families into native graph nodes.
     """
 
+    history_store = getattr(container, "chat_history_store", None)
+    if history_store is not None:
+        if not body.conversation_id:
+            body.conversation_id = history_store.new_conversation_id()
+        if not body.client_message_id:
+            body.client_message_id = uuid.uuid4().hex
+
     try:
-        return invoke_chat_ui_graph(
+        response = invoke_chat_ui_graph(
             _chat_ui_graph,
             body=body,
             user_context=ctx,
@@ -2054,6 +2073,107 @@ def chat_ui(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ChatUIWorkflowCheckpointError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if history_store is not None and response.intent != "workflow_paused":
+        response.conversation_id = body.conversation_id
+        try:
+            history_store.append_exchange(
+                ctx=ctx,
+                conversation_id=str(body.conversation_id),
+                client_message_id=str(body.client_message_id),
+                user_content=body.message,
+                assistant_content=response.answer,
+                assistant_meta={
+                    "intent": response.intent,
+                    "tool": response.tool_name,
+                    "router": response.router,
+                    "summary": response.reasoning_summary,
+                },
+                evidence=response.evidence,
+            )
+        except ChatHistoryError as exc:
+            response.warnings = [
+                *response.warnings,
+                f"聊天记录保存失败：{type(exc).__name__}",
+            ]
+    return response
+
+
+def _raise_history_http(exc: ChatHistoryError) -> None:
+    if isinstance(exc, ChatHistoryNotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, ChatHistoryPermissionError):
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, ChatHistoryValidationError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/chat-history")
+def list_chat_history(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100000),
+    ctx: UserContext = Depends(resolve_user_context),
+    container: ApplicationContainer = Depends(get_container),
+):
+    try:
+        return container.chat_history_store.list_conversations(
+            ctx,
+            limit=limit,
+            offset=offset,
+        )
+    except ChatHistoryError as exc:
+        _raise_history_http(exc)
+
+
+@router.get("/chat-history/{conversation_id}")
+def get_chat_history(
+    conversation_id: str,
+    ctx: UserContext = Depends(resolve_user_context),
+    container: ApplicationContainer = Depends(get_container),
+):
+    try:
+        data = container.chat_history_store.get_conversation(ctx, conversation_id)
+    except ChatHistoryError as exc:
+        _raise_history_http(exc)
+    return {
+        key: data.get(key)
+        for key in (
+            "schema_version",
+            "conversation_id",
+            "title",
+            "created_at",
+            "updated_at",
+            "messages",
+            "messages_trimmed",
+        )
+    }
+
+
+@router.patch("/chat-history/{conversation_id}")
+def rename_chat_history(
+    conversation_id: str,
+    body: ChatHistoryRenameRequest,
+    ctx: UserContext = Depends(resolve_user_context),
+    container: ApplicationContainer = Depends(get_container),
+):
+    try:
+        return container.chat_history_store.rename(ctx, conversation_id, body.title)
+    except ChatHistoryError as exc:
+        _raise_history_http(exc)
+
+
+@router.delete("/chat-history/{conversation_id}")
+def delete_chat_history(
+    conversation_id: str,
+    ctx: UserContext = Depends(resolve_user_context),
+    container: ApplicationContainer = Depends(get_container),
+):
+    try:
+        container.chat_history_store.delete(ctx, conversation_id)
+    except ChatHistoryError as exc:
+        _raise_history_http(exc)
+    return {"status": "deleted", "conversation_id": conversation_id}
 
 
 @router.get("/chat-ui/workflows/{workflow_id}")

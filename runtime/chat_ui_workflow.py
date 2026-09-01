@@ -63,6 +63,8 @@ def _fingerprint(body: ChatUIRequest, ctx: UserContext) -> str:
         "history": [item.model_dump(mode="json") for item in body.history],
         "attachment_ids": list(body.attachment_ids),
         "attachment_reference_mode": body.attachment_reference_mode,
+        "conversation_id": body.conversation_id,
+        "client_message_id": body.client_message_id,
         "scope": {
             "user_id": ctx.user_id,
             "company_id": ctx.company_id,

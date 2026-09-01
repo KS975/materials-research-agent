@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     chat_ui_workflow_lease_seconds: int = 120
     chat_ui_workflow_ttl_hours: int = 72
 
+    # Chat History V0.1: durable JSON conversations scoped by user + company.
+    # In Docker, mount this directory to the host if history must survive
+    # container recreation.
+    chat_history_dir: str = ".runtime/chat_history"
+    chat_history_max_messages: int = 400
+
     # V0.1.2-B: long-term Knowledge Index / Qdrant
     knowledge_upload_max_mb: int = 50
     embedding_base_url: str = ""
@@ -135,6 +141,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CHAT_UI_WORKFLOW_TTL_HOURS 必须在1到720之间"
             )
+        if not 20 <= self.chat_history_max_messages <= 2000:
+            raise ValueError("CHAT_HISTORY_MAX_MESSAGES 必须在20到2000之间")
         return self
 
 

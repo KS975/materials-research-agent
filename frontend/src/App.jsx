@@ -2,9 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   chatWithProgress,
   deleteChatFile,
+  deleteChatConversation,
+  getChatConversation,
+  getChatHistory,
   getModelingStatus,
   getPlatformSession,
   health,
+  renameChatConversation,
   uploadChatFile,
 } from "./api";
 import {
@@ -19,15 +23,8 @@ import { getAutonomyStatus, operatorOverride } from "./v030_api";
 import { getMondayDemoStatus } from "./demo_api";
 import { createInitialAnalysisStep, mergeProgressStep } from "./progress";
 import DatabaseNavigator from "./DatabaseNavigator";
+import ChatHistoryPanel from "./ChatHistoryPanel";
 
-const versions=[
-  ["V0.1.1","Agent + MySQL","查询 · 对比 · 分析","done"],
-  ["V0.1.2","File + Knowledge + RAG","附件 · 历史检索 · 联合分析","done"],
-  ["V0.1.3","Dataset + ML","准入 · 训练 · 评估 · 适用域","done"],
-  ["V0.1.4","Optimization + BO","逆向设计 · Pareto · 下一轮实验","done"],
-  ["V0.2","Experiment Feedback Loop","Campaign · 实测回流 · 重训 · 多轮闭环","done"],
-  ["V0.3","Autonomous Orchestration","设备 · Safety · Telemetry · Crash/Resume","on"]
-];
 const quick=[
   {label:"单位真实数据",text:"查看单位真实数据概况",type:"chat"},
   {label:"V0.3 自主闭环",text:"Project 9036：查看 V0.3 自主实验状态",type:"chat"},
@@ -790,6 +787,10 @@ export default function App(){
   const [showScope,setShowScope]=useState(false);
   const [dashboardOpen,setDashboardOpen]=useState(false);
   const [dashboardSummary,setDashboardSummary]=useState(null);
+  const [conversationId,setConversationId]=useState(null);
+  const [savedConversations,setSavedConversations]=useState([]);
+  const [historyLoading,setHistoryLoading]=useState(false);
+  const [historyError,setHistoryError]=useState("");
   const end=useRef(null);
   const fileInput=useRef(null);
   const composerInput=useRef(null);
@@ -801,6 +802,7 @@ export default function App(){
       .catch(error=>{setIdentityReady(false);setIdentityError(String(error?.message||error))});
   },[]);
   useEffect(()=>{end.current?.scrollIntoView({behavior:"smooth"});},[messages,busy]);
+  useEffect(()=>{if(identityReady)loadHistory()},[identityReady,scope.userId,scope.companyId]);
 
   const history=useMemo(()=>messages.filter(x=>x.id!=="welcome").map(x=>({role:x.role,content:x.content})),[messages]);
   const currentProjectId=()=>{
@@ -815,6 +817,50 @@ export default function App(){
   const projectScopeLabel=identityReady
     ? "当前公司全部项目"
     : identityReady===false?"身份接入失败":"正在读取身份";
+
+  async function loadHistory(){
+    setHistoryLoading(true);setHistoryError("");
+    try{
+      const data=await getChatHistory(scope,{limit:100,offset:0});
+      setSavedConversations(data.conversations||[]);
+    }catch(error){setHistoryError(String(error?.message||error))}
+    finally{setHistoryLoading(false)}
+  }
+
+  async function openSavedConversation(item){
+    if(busy||uploading)return;
+    setHistoryLoading(true);setHistoryError("");setErr("");
+    try{
+      const data=await getChatConversation(item.conversation_id,scope);
+      const restored=(data.messages||[]).map(message=>({
+        id:message.message_id||id(),
+        role:message.role,
+        content:message.content,
+        meta:message.meta||null,
+        evidence:message.evidence||[],
+      }));
+      setMessages([welcome,...restored]);
+      setConversationId(data.conversation_id);
+      setAttachments([]);setAttachmentReferenceMode(false);
+    }catch(error){setHistoryError(String(error?.message||error))}
+    finally{setHistoryLoading(false)}
+  }
+
+  async function renameSavedConversation(item){
+    const title=window.prompt("请输入新的会话标题",item.title||"");
+    if(title===null||!title.trim())return;
+    try{await renameChatConversation(item.conversation_id,title.trim(),scope);await loadHistory()}
+    catch(error){setHistoryError(String(error?.message||error))}
+  }
+
+  async function deleteSavedConversation(item){
+    if(!window.confirm(`确定删除会话“${item.title||"未命名会话"}”吗？此操作不可恢复。`))return;
+    try{
+      await deleteChatConversation(item.conversation_id,scope);
+      if(conversationId===item.conversation_id)newChat();
+      await loadHistory();
+    }catch(error){setHistoryError(String(error?.message||error))}
+  }
 
   function appendUiFailure(label,error){
     const message=String(error?.message||error||"未知错误");
@@ -942,12 +988,15 @@ export default function App(){
         scope,
         attachments.map(x=>x.attachmentId),
         attachmentReferenceMode,
+        conversationId,
+        pendingId,
         progress=>setMessages(items=>items.map(item=>
           item.id===pendingId
             ? {...item,progress:mergeProgressStep(item.progress,progress)}
             : item
         )),
       );
+      setConversationId(r.conversation_id||conversationId);
       setMessages(items=>items.map(item=>item.id===pendingId?{
         ...item,
         pending:false,
@@ -956,6 +1005,7 @@ export default function App(){
         data:r.data,
         evidence:r.evidence||[],
       }:item));
+      loadHistory();
     }catch(e){
       const failedStep={
         schema_version:"1.1",
@@ -975,22 +1025,20 @@ export default function App(){
     }finally{setBusy(false)}
   }
 
-  function newChat(){setMessages([welcome]);setText("");setErr("");setAttachments([]);setAttachmentReferenceMode(false)}
+  function newChat(){setMessages([welcome]);setText("");setErr("");setAttachments([]);setAttachmentReferenceMode(false);setConversationId(null)}
   function runQuick(item){return item.type==="ml"?sendModelStatus():send(item.text)}
   function useDashboardPrompt(value){setText(value);setDashboardOpen(false);setTimeout(()=>composerInput.current?.focus(),0)}
 
   return <div className="shell">
     <aside>
       <div className="brand"><Logo/><div><b>材数智能体</b><span>Materials Research Agent</span></div></div>
-      <label className="section">能力版本</label>
-      {versions.map(v=><div className={`version ${v[3]}`} key={v[0]}><div className="dot">{v[3]==="on"?"●":v[3]==="done"?"✓":"○"}</div><div><b>{v[0]} {v[3]==="on"&&<em>当前</em>}{v[3]==="done"&&<em>已通过</em>}</b><strong>{v[1]}</strong><span>{v[2]}</span></div></div>)}
-      <div className="spacer"/>
+      <ChatHistoryPanel conversations={savedConversations} currentId={conversationId} loading={historyLoading} error={historyError} disabled={busy||uploading} onNew={newChat} onOpen={openSavedConversation} onRename={renameSavedConversation} onDelete={deleteSavedConversation} onRefresh={loadHistory}/>
       <div className={`scope platformScope ${identityReady===false?"scopeFailed":""}`}><button onClick={()=>setShowScope(!showScope)}><span>平台登录上下文<br/><b>{projectScopeLabel}</b></span><i>{showScope?"⌃":"⌄"}</i></button>{showScope&&<div className="scopeFields platformScopeFields">{identityReady?<><label>User ID<span>{scope.userId||"-"}</span></label><label>Company ID<span>{scope.companyId||"-"}</span></label><label>Organization ID<span>{scope.organizationId||"-"}</span></label><label>Organization Level<span>{scope.organizationLevel??"-"}</span></label><p>身份来自单位平台请求头。Authorization 只用于验证和识别用户，不会在页面显示或保存。</p></>:<p className="scopeIdentityError">{identityError||"正在从后端读取平台身份…"}</p>}</div>}</div>
       <div className="status"><i className={online&&identityReady?"ok":online===false||identityReady===false?"bad":""}/><span>{online===null?"检查后端中":!online?"后端未连接":identityReady===null?"读取平台身份中":identityReady?"后端与平台身份已连接":"后端已连接 · 身份未接通"}</span></div>
     </aside>
 
     <main>
-      <header><div><h1>研发对话</h1><p>V0.3 · Autonomous Experiment Orchestration</p></div><div><button className="dbNavToggle" onClick={()=>setDashboardOpen(true)}>▣ 数据库浏览{dashboardSummary?` · ${dashboardSummary.sample_count}`:""}</button><button className="versionTopBtn active" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>V0.3 · 9036</button><button className="demoModeBtn" disabled={busy||uploading} onClick={sendDemoStatus}>演示模式</button><button className="modelStatusBtn autonomyStatusBtn" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>自主状态</button><button className="modelStatusBtn feedbackStatusBtn" disabled={busy||uploading} onClick={()=>sendFeedbackStatus(MONDAY_DEMO_PROJECTS.feedback)}>V0.2 · 9026</button><button className="modelStatusBtn" disabled={busy||uploading} onClick={()=>sendModelStatus("冲击强度",MONDAY_DEMO_PROJECTS.modeling)}>模型 · 9010</button><button disabled={busy||uploading} onClick={newChat}>新对话</button></div></header>
+      <header><div><h1>研发对话</h1><p>V0.3 · Autonomous Experiment Orchestration</p></div><div><button className="dbNavToggle" onClick={()=>setDashboardOpen(true)}>▣ 数据库浏览{dashboardSummary?` · ${dashboardSummary.sample_count}`:""}</button><button className="versionTopBtn active" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>V0.3 · 9036</button><button className="demoModeBtn" disabled={busy||uploading} onClick={sendDemoStatus}>演示模式</button><button className="modelStatusBtn autonomyStatusBtn" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>自主状态</button><button className="modelStatusBtn feedbackStatusBtn" disabled={busy||uploading} onClick={()=>sendFeedbackStatus(MONDAY_DEMO_PROJECTS.feedback)}>V0.2 · 9026</button><button className="modelStatusBtn" disabled={busy||uploading} onClick={()=>sendModelStatus("冲击强度",MONDAY_DEMO_PROJECTS.modeling)}>模型 · 9010</button></div></header>
       <section className="scroll"><div className="inner">
         {messages.length===1&&<div className="quick"><small>可以试试</small><div>{quick.map(q=><button key={q.text} onClick={()=>runQuick(q)}><span>{q.label}</span><b>{q.text}</b></button>)}</div></div>}
         <div className="messages">{messages.map(m=><Message key={m.id} m={m} scope={scope}/>)}{busy&&!messages.some(m=>m.pending)&&<div className="msg assistant"><div className="avatar"><Logo/></div><div className="msgcol"><small>材数智能体</small><div className="bubble loading">● ● ● <span>正在读取研发证据 / 运行优化算法</span></div></div></div>}</div>

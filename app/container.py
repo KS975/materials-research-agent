@@ -24,6 +24,7 @@ from llm.factory import create_llm_provider
 from file_processing import UnifiedFileParser
 from runtime.chat_attachments import ChatAttachmentStore
 from runtime.chat_ui_workflow import ChatUIWorkflowStore
+from runtime.chat_history import ChatHistoryStore
 from skills.current_attachment import CurrentAttachmentSkill
 from skills.database_explorer import DatabaseExplorerSkill
 from skills.general_conversation import GeneralConversationFallbackSkill
@@ -106,6 +107,10 @@ class ApplicationContainer:
             checkpoint_retries=settings.chat_ui_workflow_checkpoint_retries,
             lease_seconds=settings.chat_ui_workflow_lease_seconds,
             ttl_hours=settings.chat_ui_workflow_ttl_hours,
+        )
+        self.chat_history_store = ChatHistoryStore(
+            settings.chat_history_dir,
+            max_messages=settings.chat_history_max_messages,
         )
 
         self.current_attachment_skill = CurrentAttachmentSkill(

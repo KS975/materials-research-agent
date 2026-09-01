@@ -85,6 +85,8 @@ export async function chat(
   scope,
   attachmentIds=[],
   attachmentReferenceMode=false,
+  conversationId=null,
+  clientMessageId=null,
 ){
   const r=await apiFetch("/agent-api/api/v1/chat-ui",{
     method:"POST",
@@ -94,6 +96,8 @@ export async function chat(
       history:history.slice(-12),
       attachment_ids:attachmentIds,
       attachment_reference_mode:Boolean(attachmentReferenceMode),
+      conversation_id:conversationId||null,
+      client_message_id:clientMessageId||null,
     })
   });
   const data=await r.json().catch(()=>null);
@@ -107,6 +111,8 @@ export async function chatWithProgress(
   scope,
   attachmentIds=[],
   attachmentReferenceMode=false,
+  conversationId=null,
+  clientMessageId=null,
   onProgress=()=>{},
 ){
   const startedAt=Date.now();
@@ -125,6 +131,8 @@ export async function chatWithProgress(
     history:history.slice(-12),
     attachment_ids:attachmentIds,
     attachment_reference_mode:Boolean(attachmentReferenceMode),
+    conversation_id:conversationId||null,
+    client_message_id:clientMessageId||null,
   };
   reportClientProgress(
     "stream_transport",
@@ -166,6 +174,8 @@ export async function chatWithProgress(
       scope,
       attachmentIds,
       attachmentReferenceMode,
+      conversationId,
+      clientMessageId,
     );
     reportClientProgress(
       "result_received",
@@ -289,5 +299,40 @@ export async function getModelingStatus(projectId, targetMetric, scope){
   const r=await apiFetch(`/agent-api/api/v1/ml-ui/status?${params.toString()}`);
   const data=await r.json().catch(()=>null);
   if(!r.ok) throw new Error(data?.detail||`建模状态读取失败 HTTP ${r.status}`);
+  return data;
+}
+
+export async function getChatHistory(scope,{limit=50,offset=0}={}){
+  const params=new URLSearchParams({limit:String(limit),offset:String(offset)});
+  const r=await apiFetch(`/agent-api/api/v1/chat-history?${params.toString()}`);
+  const data=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error(data?.detail||`历史会话读取失败 HTTP ${r.status}`);
+  return data;
+}
+
+export async function getChatConversation(conversationId,scope){
+  const r=await apiFetch(`/agent-api/api/v1/chat-history/${encodeURIComponent(conversationId)}`);
+  const data=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error(data?.detail||`会话读取失败 HTTP ${r.status}`);
+  return data;
+}
+
+export async function renameChatConversation(conversationId,title,scope){
+  const r=await apiFetch(`/agent-api/api/v1/chat-history/${encodeURIComponent(conversationId)}`,{
+    method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({title}),
+  });
+  const data=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error(data?.detail||`会话重命名失败 HTTP ${r.status}`);
+  return data;
+}
+
+export async function deleteChatConversation(conversationId,scope){
+  const r=await apiFetch(`/agent-api/api/v1/chat-history/${encodeURIComponent(conversationId)}`,{
+    method:"DELETE",
+  });
+  const data=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error(data?.detail||`会话删除失败 HTTP ${r.status}`);
   return data;
 }

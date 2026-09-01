@@ -216,3 +216,28 @@ header button{color:#374151;background:#fff;border-color:#d1d5db}header button:h
 /* Unit-platform request context: read-only and never exposes Authorization. */
 .platformScopeFields label>span{display:block;overflow:hidden;padding:7px 8px;border:1px solid #e5e7eb;border-radius:7px;color:#26324a;background:#f8fafc;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}
 .platformScopeFields p{color:#667085}.scopeFailed{border-color:#fecaca;background:#fff8f8}.scopeIdentityError{color:#b42318!important;overflow-wrap:anywhere}
+
+/* Chat History V0.1.1: persistent conversation sidebar */
+aside{min-height:0;padding:22px 14px 16px}.brand{flex:0 0 auto;padding:0 8px 20px}
+.conversationSidebar{display:grid;flex:1;min-height:0;grid-template-rows:auto auto auto minmax(0,1fr) auto;gap:8px;padding:0 2px 11px}
+.sidebarNewChat{display:flex;width:100%;align-items:center;gap:9px;padding:10px 12px;border:1px solid #cdd7ff;border-radius:9px;color:#3657c9;background:#f5f7ff;cursor:pointer;text-align:left}
+.sidebarNewChat:hover{border-color:#9fb0ff;background:#eef2ff}.sidebarNewChat:disabled{opacity:.55;cursor:default}.sidebarNewChat span{font-size:18px;line-height:1}.sidebarNewChat b{font-size:14px;font-weight:650}
+.conversationSidebarHead{display:flex;align-items:center;justify-content:space-between;padding:6px 5px 2px}.conversationSidebarHead>div{display:flex;align-items:center;gap:7px}.conversationSidebarHead b{color:#344054;font-size:13px}.conversationSidebarHead span{color:#98a2b3;font-size:11px}.conversationSidebarHead>button{display:grid;width:25px;height:25px;place-items:center;border:0;border-radius:6px;color:#667085;background:transparent;font-size:16px;cursor:pointer}.conversationSidebarHead>button:hover{color:#3657c9;background:#f5f7ff}.conversationSidebarHead>button:disabled{opacity:.45}
+.conversationSidebarError{grid-row:3;padding:8px 9px;border:1px solid #fecaca;border-radius:7px;color:#b42318;background:#fff5f5;font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+.conversationSidebarList{display:grid;grid-row:4;min-height:0;align-content:start;gap:6px;padding-right:2px;overflow:auto;scrollbar-width:thin;scrollbar-color:#d8deea transparent}
+.conversationSidebarList article{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;padding:9px 7px 8px 10px;border:1px solid transparent;border-radius:9px;background:#fafafa}
+.conversationSidebarList article:hover{border-color:#e1e6ef;background:#f7f8fb}.conversationSidebarList article.active{border-color:#b9c7ff;background:#eef2ff;box-shadow:inset 3px 0 #627de8}
+.conversationSidebarMain{display:grid;min-width:0;gap:3px;padding:0;border:0;color:inherit;background:transparent;cursor:pointer;text-align:left}.conversationSidebarMain:disabled{cursor:default}.conversationSidebarMain b{overflow:hidden;color:#26324a;font-size:12px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.conversationSidebarMain span{overflow:hidden;color:#667085;font-size:10.5px;text-overflow:ellipsis;white-space:nowrap}.conversationSidebarMain small{color:#98a2b3;font-size:9.5px}
+.conversationSidebarActions{display:flex;align-items:flex-start;gap:2px;opacity:0;transition:opacity .15s}.conversationSidebarList article:hover .conversationSidebarActions,.conversationSidebarList article.active .conversationSidebarActions{opacity:1}.conversationSidebarActions button{display:grid;width:23px;height:23px;place-items:center;padding:0;border:0;border-radius:5px;color:#667085;background:transparent;font-size:13px;cursor:pointer}.conversationSidebarActions button:hover{color:#3657c9;background:#e8edff}.conversationSidebarActions button.danger:hover{color:#b42318;background:#feecec}.conversationSidebarActions button:disabled{opacity:.35;cursor:default}
+.conversationSidebarEmpty{display:grid;min-height:120px;place-items:center;padding:22px 12px;border:1px dashed #e1e6ef;border-radius:9px;color:#98a2b3;font-size:11px;line-height:1.6;text-align:center}
+.conversationSidebarBoundary{grid-row:5;margin:0;padding:4px 5px 0;color:#98a2b3;font-size:9.5px;line-height:1.4}.platformScope{flex:0 0 auto;margin-top:2px}.status{flex:0 0 auto}
+
+@media(max-width:900px) and (min-width:641px){
+  .shell{grid-template-columns:250px minmax(0,1fr)}
+  aside{padding:18px 11px 14px}
+  .brand{justify-content:flex-start;padding-bottom:16px}
+  .brand>div:last-child,.scope,.status span{display:grid}
+  .status{display:flex}
+  .conversationSidebarMain span{display:none}
+  .dbNavigator{width:min(650px,calc(100vw - 250px))}
+}

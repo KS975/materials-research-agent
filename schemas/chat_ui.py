@@ -23,6 +23,16 @@ class ChatUIRequest(BaseModel):
     )
     resume_workflow: bool = False
     pause_after: Literal["classify_primary"] | None = None
+    conversation_id: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-fA-F-]{36}$",
+    )
+    client_message_id: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{7,95}$",
+    )
 
 
 class ChatUIResponse(BaseModel):
@@ -36,3 +46,8 @@ class ChatUIResponse(BaseModel):
     router: str = "deepseek"
     reasoning_summary: str = ""
     routing: dict[str, Any] = Field(default_factory=dict)
+    conversation_id: str | None = None
+
+
+class ChatHistoryRenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
