@@ -24,20 +24,52 @@ class DashboardRepository:
             column="project_id",
             allow_all=ctx.all_projects,
         )
-        project_scope_sql, project_scope_params = project_scope_clause(
+        project_record_scope_sql, project_record_scope_params = project_scope_clause(
             ctx.project_ids,
-            column="id",
+            column="p.id",
+            allow_all=ctx.all_projects,
+        )
+        sample_project_scope_sql, sample_project_scope_params = project_scope_clause(
+            ctx.project_ids,
+            column="s.project_id",
             allow_all=ctx.all_projects,
         )
         projects = self.db.query_one(
             f"""
-            SELECT COUNT(*) AS project_count, MAX(update_time) AS latest_project_update
-            FROM mat_project
-            WHERE company = %s
-              AND (`delete` IS NULL OR `delete` = 0)
-              AND {project_scope_sql}
+            SELECT
+                COUNT(*) AS project_count,
+                COALESCE(
+                    SUM(CASE WHEN project_catalog.id < 0 THEN 1 ELSE 0 END),
+                    0
+                ) AS historical_import_project_count,
+                MAX(project_catalog.latest_update) AS latest_project_update
+            FROM (
+                SELECT project_sources.id, MAX(project_sources.update_time) AS latest_update
+                FROM (
+                    SELECT CAST(p.id AS SIGNED) AS id, p.update_time
+                    FROM mat_project p
+                    WHERE p.company = %s
+                      AND (p.`delete` IS NULL OR p.`delete` = 0)
+                      AND {project_record_scope_sql}
+
+                    UNION ALL
+
+                    SELECT CAST(s.project_id AS SIGNED) AS id, s.update_time
+                    FROM eln_sample s
+                    WHERE s.company = %s
+                      AND (s.`delete` IS NULL OR s.`delete` IN (0, 2))
+                      AND s.project_id IS NOT NULL
+                      AND {sample_project_scope_sql}
+                ) project_sources
+                GROUP BY project_sources.id
+            ) project_catalog
             """,
-            [ctx.company_id, *project_scope_params],
+            [
+                ctx.company_id,
+                *project_record_scope_params,
+                ctx.company_id,
+                *sample_project_scope_params,
+            ],
         ) or {}
         samples = self.db.query_one(
             f"""
@@ -51,6 +83,9 @@ class DashboardRepository:
         ) or {}
         return {
             "project_count": int(projects.get("project_count") or 0),
+            "historical_import_project_count": int(
+                projects.get("historical_import_project_count") or 0
+            ),
             "sample_count": int(samples.get("sample_count") or 0),
             "latest_project_update": projects.get("latest_project_update"),
             "latest_sample_update": samples.get("latest_sample_update"),
@@ -64,9 +99,14 @@ class DashboardRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        scope_sql, scope_params = project_scope_clause(
+        project_record_scope_sql, project_record_scope_params = project_scope_clause(
             ctx.project_ids,
-            column="p.id",
+            column="p0.id",
+            allow_all=ctx.all_projects,
+        )
+        sample_project_scope_sql, sample_project_scope_params = project_scope_clause(
+            ctx.project_ids,
+            column="s0.project_id",
             allow_all=ctx.all_projects,
         )
         lim = bounded_limit(limit, default=50, maximum=100)
@@ -75,41 +115,103 @@ class DashboardRepository:
         search_sql = ""
         search_params: list[Any] = []
         if keyword:
-            search_sql = "AND (p.name LIKE %s OR CAST(p.id AS CHAR) LIKE %s)"
-            search_params = [f"%{keyword}%", f"%{keyword}%"]
+            search_sql = """
+                AND (
+                    COALESCE(p.name, '') LIKE %s
+                    OR CAST(project_ids.id AS CHAR) LIKE %s
+                    OR CASE
+                        WHEN project_ids.id < 0
+                        THEN CONCAT('历史导入项目 ', project_ids.id)
+                        ELSE ''
+                    END LIKE %s
+                )
+            """
+            search_params = [f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"]
+
+        project_catalog_sql = f"""
+            (
+                SELECT CAST(p0.id AS SIGNED) AS id
+                FROM mat_project p0
+                WHERE p0.company = %s
+                  AND (p0.`delete` IS NULL OR p0.`delete` = 0)
+                  AND {project_record_scope_sql}
+
+                UNION
+
+                SELECT CAST(s0.project_id AS SIGNED) AS id
+                FROM eln_sample s0
+                WHERE s0.company = %s
+                  AND (s0.`delete` IS NULL OR s0.`delete` IN (0, 2))
+                  AND s0.project_id IS NOT NULL
+                  AND {sample_project_scope_sql}
+            )
+        """
+        project_catalog_params = [
+            ctx.company_id,
+            *project_record_scope_params,
+            ctx.company_id,
+            *sample_project_scope_params,
+        ]
 
         total_row = self.db.query_one(
             f"""
             SELECT COUNT(*) AS count
-            FROM mat_project p
-            WHERE p.company = %s
-              AND (p.`delete` IS NULL OR p.`delete` = 0)
-              AND {scope_sql}
+            FROM {project_catalog_sql} project_ids
+            LEFT JOIN mat_project p
+              ON p.id = project_ids.id
+             AND p.company = %s
+             AND (p.`delete` IS NULL OR p.`delete` = 0)
+            WHERE 1 = 1
               {search_sql}
             """,
-            [ctx.company_id, *scope_params, *search_params],
+            [*project_catalog_params, ctx.company_id, *search_params],
         ) or {}
         rows = self.db.query_all(
             f"""
             SELECT
-                p.id, p.name, p.`describe`, p.state,
+                project_ids.id,
+                COALESCE(
+                    p.name,
+                    CASE
+                        WHEN project_ids.id < 0
+                        THEN CONCAT('历史导入项目 ', project_ids.id)
+                        ELSE NULL
+                    END
+                ) AS name,
+                p.`describe`, p.state,
                 p.create_time, p.update_time,
                 COUNT(s.id) AS sample_count,
-                MAX(s.update_time) AS latest_sample_update
-            FROM mat_project p
+                MAX(s.update_time) AS latest_sample_update,
+                CASE
+                    WHEN project_ids.id < 0 THEN 'history_import'
+                    ELSE 'standard'
+                END AS project_origin,
+                CASE WHEN p.id IS NULL THEN 0 ELSE 1 END AS has_project_record
+            FROM {project_catalog_sql} project_ids
+            LEFT JOIN mat_project p
+              ON p.id = project_ids.id
+             AND p.company = %s
+             AND (p.`delete` IS NULL OR p.`delete` = 0)
             LEFT JOIN eln_sample s
-              ON s.project_id = p.id
+              ON s.project_id = project_ids.id
              AND s.company = %s
              AND (s.`delete` IS NULL OR s.`delete` IN (0, 2))
-            WHERE p.company = %s
-              AND (p.`delete` IS NULL OR p.`delete` = 0)
-              AND {scope_sql}
+            WHERE 1 = 1
               {search_sql}
-            GROUP BY p.id, p.name, p.`describe`, p.state, p.create_time, p.update_time
-            ORDER BY COALESCE(MAX(s.update_time), p.update_time) DESC, p.id DESC
+            GROUP BY
+                project_ids.id, p.id, p.name, p.`describe`, p.state,
+                p.create_time, p.update_time
+            ORDER BY
+                COALESCE(MAX(s.update_time), p.update_time) DESC,
+                project_ids.id DESC
             LIMIT {lim} OFFSET {off}
             """,
-            [ctx.company_id, ctx.company_id, *scope_params, *search_params],
+            [
+                *project_catalog_params,
+                ctx.company_id,
+                ctx.company_id,
+                *search_params,
+            ],
         )
         return {
             "total": int(total_row.get("count") or 0),
@@ -163,7 +265,19 @@ class DashboardRepository:
                 s.create_time, s.update_time,
                 s.recipes, s.craft_param, s.performances,
                 s.service_performances, s.conditions,
-                p.name AS project_name
+                COALESCE(
+                    p.name,
+                    CASE
+                        WHEN s.project_id < 0
+                        THEN CONCAT('历史导入项目 ', s.project_id)
+                        ELSE NULL
+                    END
+                ) AS project_name,
+                CASE
+                    WHEN s.project_id < 0 THEN 'history_import'
+                    ELSE 'standard'
+                END AS project_origin,
+                CASE WHEN p.id IS NULL THEN 0 ELSE 1 END AS has_project_record
             FROM eln_sample s
             LEFT JOIN mat_project p
               ON p.id = s.project_id

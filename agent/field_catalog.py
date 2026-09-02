@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
-CATALOG_SCHEMA_VERSION = "2B-1.1"
+CATALOG_SCHEMA_VERSION = "2B-1.3"
 _DYNAMIC_SECTIONS = ("formula", "process", "performance")
 _SECTION_LABELS = {
     "sample": "样品基础字段",
@@ -13,19 +14,49 @@ _SECTION_LABELS = {
     "performance": "性能字段",
     "conditions": "测试条件字段",
 }
+_DYNAMIC_SECTION_SHORT_LABELS = {
+    "formula": "配方",
+    "process": "工艺",
+    "performance": "性能",
+}
 _SAMPLE_FIELDS = ("id", "name", "project_id", "sample_type", "create_time")
 _FIELD_PREFIXES = (
     "配方", "原料", "组分", "工艺", "过程", "性能", "指标", "测试条件",
+    "找", "查", "查询", "搜索",
 )
 _FIELD_SUFFIXES = (
     "含量", "添加量", "加入量", "用量", "比例", "占比", "份数",
     "工艺参数", "参数", "性能指标", "指标", "数值",
+    "最高", "最低", "最好", "最大值", "最小值",
 )
+
+_MISSING_VALUE_TEXT = {
+    "", "none", "null", "nan", "n/a", "na", "-", "--", "—",
+    "未填写", "未记录", "暂无", "未定义", "未知", "未设置",
+}
 
 
 def normalize_field_name(value: Any) -> str:
     text = str(value or "").strip().casefold()
     return re.sub(r"[\s·._\-—:：/\\()（）\[\]【】]+", "", text)
+
+
+def _value_is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (dict, list, tuple, set)) and not value:
+        return True
+    return str(value).strip().casefold() in _MISSING_VALUE_TEXT
+
+
+def _value_is_numeric(value: Any) -> bool:
+    if _value_is_missing(value) or isinstance(value, bool):
+        return False
+    try:
+        parsed = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError, TypeError):
+        return False
+    return parsed.is_finite()
 
 
 def _requested_name_variants(value: Any) -> set[str]:
@@ -54,8 +85,36 @@ def _requested_name_variants(value: Any) -> set[str]:
     return variants
 
 
+def material_section_label(section: Any) -> str:
+    return _DYNAMIC_SECTION_SHORT_LABELS.get(str(section or ""), "字段")
+
+
+def _requested_section_hint(value: Any) -> str | None:
+    """Return only a conservative section preference, never a final binding."""
+    normalized = normalize_field_name(value)
+    if not normalized:
+        return None
+    if any(normalized.startswith(normalize_field_name(x)) for x in ("配方", "原料", "组分")):
+        return "formula"
+    if any(normalized.startswith(normalize_field_name(x)) for x in ("工艺", "过程")):
+        return "process"
+    if any(normalized.startswith(normalize_field_name(x)) for x in ("性能", "性能指标")):
+        return "performance"
+    if any(
+        normalized.endswith(normalize_field_name(x))
+        for x in ("含量", "添加量", "加入量", "用量", "比例", "占比", "份数")
+    ):
+        return "formula"
+    return None
+
+
 def build_material_field_catalog(source: dict[str, Any]) -> dict[str, Any]:
-    """Build a value-free field catalogue from already authorized sample rows."""
+    """Build a field catalogue from already authorized sample rows.
+
+    Values are never returned. Dynamic-field entries expose aggregate quality
+    counts so callers can distinguish "the JSON key exists" from "a unique
+    numeric value can safely participate in statistics or ranking".
+    """
     samples = list(source.get("samples") or [])
     entries: dict[str, dict[str, dict[str, Any]]] = {
         section: {} for section in ("sample", *_DYNAMIC_SECTIONS, "conditions")
@@ -77,7 +136,7 @@ def build_material_field_catalog(source: dict[str, Any]) -> dict[str, Any]:
                 ] += 1
 
         for section in _DYNAMIC_SECTIONS:
-            seen_in_sample: set[str] = set()
+            grouped_in_sample: dict[str, list[dict[str, Any]]] = {}
             for item in sample_item.get(section) or []:
                 name = str(item.get("name") or "").strip()
                 if not name:
@@ -90,13 +149,29 @@ def build_material_field_catalog(source: dict[str, Any]) -> dict[str, Any]:
                     "name": name,
                     "units": set(),
                     "observed_sample_count": 0,
+                    "numeric_sample_count": 0,
+                    "empty_value_sample_count": 0,
+                    "non_numeric_sample_count": 0,
+                    "ambiguous_sample_count": 0,
                 })
                 unit = str(item.get("unit") or "").strip()
                 if unit:
                     entry["units"].add(unit)
-                if normalized not in seen_in_sample:
-                    entry["observed_sample_count"] += 1
-                    seen_in_sample.add(normalized)
+                grouped_in_sample.setdefault(normalized, []).append(item)
+
+            for normalized, matching_items in grouped_in_sample.items():
+                entry = entries[section][normalized]
+                entry["observed_sample_count"] += 1
+                if len(matching_items) != 1:
+                    entry["ambiguous_sample_count"] += 1
+                    continue
+                value = matching_items[0].get("value")
+                if _value_is_missing(value):
+                    entry["empty_value_sample_count"] += 1
+                elif _value_is_numeric(value):
+                    entry["numeric_sample_count"] += 1
+                else:
+                    entry["non_numeric_sample_count"] += 1
 
         seen_conditions: set[str] = set()
         for key in (sample_item.get("conditions") or {}):
@@ -121,6 +196,16 @@ def build_material_field_catalog(source: dict[str, Any]) -> dict[str, Any]:
                     "name": item["name"],
                     "units": sorted(item["units"]),
                     "observed_sample_count": item["observed_sample_count"],
+                    **(
+                        {
+                            "numeric_sample_count": item.get("numeric_sample_count", 0),
+                            "empty_value_sample_count": item.get("empty_value_sample_count", 0),
+                            "non_numeric_sample_count": item.get("non_numeric_sample_count", 0),
+                            "ambiguous_sample_count": item.get("ambiguous_sample_count", 0),
+                        }
+                        if section in _DYNAMIC_SECTIONS
+                        else {}
+                    ),
                 }
                 for item in mapping.values()
             ),
@@ -143,6 +228,94 @@ def build_material_field_catalog(source: dict[str, Any]) -> dict[str, Any]:
         "unresolved_field_count": unresolved_count,
         "value_disclosure": False,
         "warnings": list(source.get("warnings") or []),
+    }
+
+
+def bind_metric_to_catalog(
+    target_metric: Any,
+    catalog: dict[str, Any] | None,
+    *,
+    section: str | None = "performance",
+) -> dict[str, Any]:
+    """Bind natural-language text to one authorized dynamic field.
+
+    ``section="auto"`` (or ``None``) searches formula, process and performance.
+    Exact canonical names always win.  Natural-language suffixes such as
+    “含量/添加量” only provide a formula preference after exact matching, so a
+    real performance field named “氧含量” remains unambiguous.
+    """
+    requested = str(target_metric or "").strip()
+    requested_section = str(section or "auto").strip().lower()
+    auto_section = requested_section not in _DYNAMIC_SECTIONS
+    searched_sections = list(_DYNAMIC_SECTIONS) if auto_section else [requested_section]
+    if not requested:
+        return {
+            "status": "field_not_found",
+            "requested": requested,
+            "section": None if auto_section else requested_section,
+            "candidates": [],
+        }
+    if not catalog or catalog.get("status") != "ok":
+        return {
+            "status": "catalog_unavailable",
+            "requested": requested,
+            "canonical": requested,
+            "section": None if auto_section else requested_section,
+            "candidates": [],
+        }
+
+    entries: list[dict[str, Any]] = []
+    for current_section in searched_sections:
+        for item in (catalog.get("sections") or {}).get(current_section) or []:
+            entries.append({**item, "section": current_section})
+
+    variants = _requested_name_variants(requested)
+    exact_key = normalize_field_name(requested)
+    exact = [
+        item for item in entries
+        if normalize_field_name(item.get("name")) == exact_key
+    ]
+    candidates = exact or [
+        item for item in entries
+        if normalize_field_name(item.get("name")) in variants
+    ]
+
+    # A section word or formula quantity suffix is only a preference. If it
+    # yields no candidate, retain the cross-section candidates and report any
+    # real ambiguity instead of silently inventing a field.
+    if auto_section and len(candidates) > 1:
+        hinted_section = _requested_section_hint(requested)
+        preferred = [
+            item for item in candidates if item.get("section") == hinted_section
+        ]
+        if preferred:
+            candidates = preferred
+
+    if len(candidates) == 1:
+        item = candidates[0]
+        return {
+            "status": "ok",
+            "requested": requested,
+            "canonical": str(item.get("name") or "").strip(),
+            "section": str(item.get("section") or ""),
+            "section_label": material_section_label(item.get("section")),
+            "units": list(item.get("units") or []),
+            "observed_sample_count": int(item.get("observed_sample_count") or 0),
+            "numeric_sample_count": int(item.get("numeric_sample_count") or 0),
+        }
+    return {
+        "status": "ambiguous_field" if candidates else "field_not_found",
+        "requested": requested,
+        "section": None if auto_section else requested_section,
+        "candidates": [
+            (
+                f"{material_section_label(item.get('section'))}."
+                f"{str(item.get('name') or '').strip()}"
+                if auto_section
+                else str(item.get("name") or "").strip()
+            )
+            for item in candidates
+        ],
     }
 
 

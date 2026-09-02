@@ -8,8 +8,11 @@ from time import monotonic
 from typing import Any
 
 from agent.field_catalog import (
+    bind_metric_to_catalog,
     bind_filters_to_catalog,
     build_material_field_catalog,
+    material_section_label,
+    normalize_field_name,
 )
 from agent.multi_condition import normalize_filters, normalize_logic, normalize_unit
 from agent.tool_registry import ToolRegistry
@@ -224,16 +227,28 @@ class MaterialIntelligenceSkill:
                 result = self._performance_rank(
                     source,
                     target_metric=str(tool_args.get("target_metric") or "").strip(),
+                    target_section=str(tool_args.get("target_section") or "auto").strip(),
                     top_n=int(tool_args.get("top_n") or 10),
                     order=str(tool_args.get("order") or "desc").lower(),
                 )
                 emit_progress(
                     "deterministic_calculation",
                     "completed",
-                    "性能筛选与排序完成",
-                    f"已按 {tool_args.get('target_metric')} 计算并返回 {len(result.get('ranking') or [])} 条排名。",
+                    "字段筛选与排序完成",
+                    (
+                        f"已将“{tool_args.get('target_metric')}”绑定为“"
+                        f"{result.get('target_metric') or tool_args.get('target_metric')}”，"
+                        f"使用 {result.get('numeric_sample_count', 0)} 条有效数值完成排序。"
+                    ),
                     detail_items=[
-                        {"label": "指标", "value": str(tool_args.get("target_metric") or "-")},
+                        {"label": "请求指标", "value": str(tool_args.get("target_metric") or "-")},
+                        {"label": "字段类别", "value": str(result.get("target_section_label") or "未绑定")},
+                        {"label": "数据库字段", "value": str(result.get("target_metric") or "未绑定")},
+                        {"label": "有效数值", "value": f"{result.get('numeric_sample_count', 0)} 条"},
+                        {"label": "字段未记录", "value": f"{result.get('field_absent_sample_count', 0)} 条"},
+                        {"label": "空值", "value": f"{result.get('empty_value_sample_count', 0)} 条"},
+                        {"label": "非数值", "value": f"{result.get('non_numeric_sample_count', 0)} 条"},
+                        {"label": "重复字段", "value": f"{result.get('ambiguous_sample_count', 0)} 条"},
                         {"label": "排序方向", "value": str(tool_args.get("order") or "desc")},
                         {"label": "排名结果", "value": f"{len(result.get('ranking') or [])} 条"},
                     ],
@@ -243,20 +258,26 @@ class MaterialIntelligenceSkill:
                 result = self._performance_statistics(
                     source,
                     target_metric=str(tool_args.get("target_metric") or "").strip(),
+                    target_section=str(tool_args.get("target_section") or "auto").strip(),
                 )
                 mean_value = (result.get("statistics") or {}).get("mean_display")
                 emit_progress(
                     "deterministic_calculation",
                     "completed",
-                    "性能平均值计算完成",
+                    "字段平均值计算完成",
                     (
                         f"已对 {result.get('numeric_sample_count', 0)} 条有效"
                         f"{tool_args.get('target_metric')}记录计算平均值。"
                     ),
                     detail_items=[
-                        {"label": "指标", "value": str(tool_args.get("target_metric") or "-")},
+                        {"label": "请求指标", "value": str(tool_args.get("target_metric") or "-")},
+                        {"label": "字段类别", "value": str(result.get("target_section_label") or "未绑定")},
+                        {"label": "数据库字段", "value": str(result.get("target_metric") or "未绑定")},
                         {"label": "有效数值", "value": f"{result.get('numeric_sample_count', 0)} 条"},
-                        {"label": "缺失记录", "value": f"{result.get('missing_sample_count', 0)} 条"},
+                        {"label": "字段未记录", "value": f"{result.get('field_absent_sample_count', 0)} 条"},
+                        {"label": "空值", "value": f"{result.get('empty_value_sample_count', 0)} 条"},
+                        {"label": "非数值", "value": f"{result.get('non_numeric_sample_count', 0)} 条"},
+                        {"label": "重复字段", "value": f"{result.get('ambiguous_sample_count', 0)} 条"},
                         {"label": "平均值", "value": str(mean_value if mean_value is not None else "未计算")},
                     ],
                 )
@@ -503,9 +524,10 @@ class MaterialIntelligenceSkill:
         if value is None or isinstance(value, bool):
             return None
         try:
-            return Decimal(str(value).strip())
+            parsed = Decimal(str(value).strip())
         except (InvalidOperation, ValueError, TypeError):
             return None
+        return parsed if parsed.is_finite() else None
 
     @classmethod
     def _numeric_difference(cls, left: Any, right: Any) -> dict[str, Any] | None:
@@ -682,30 +704,99 @@ class MaterialIntelligenceSkill:
         target_metric: str,
         top_n: int,
         order: str,
+        target_section: str = "auto",
     ) -> dict[str, Any]:
+        catalog = build_material_field_catalog(source)
+        binding = bind_metric_to_catalog(target_metric, catalog, section=target_section)
+        available_fields = [
+            {
+                "section": section,
+                "section_label": material_section_label(section),
+                "name": str(item.get("name") or "").strip(),
+            }
+            for section in ("formula", "process", "performance")
+            for item in (catalog.get("sections") or {}).get(section, [])
+            if str(item.get("name") or "").strip()
+        ]
+        if binding.get("status") != "ok":
+            return {
+                "status": binding.get("status", "field_not_found"),
+                "analysis_type": "performance_rank",
+                "requested_target_metric": target_metric,
+                "target_metric": target_metric,
+                "target_section": None,
+                "target_section_label": None,
+                "field_binding": binding,
+                "available_fields": available_fields,
+                "available_performance_metrics": [
+                    item["name"] for item in available_fields
+                    if item["section"] == "performance"
+                ],
+                "ranking": [],
+                "observed_units": [],
+                "excluded_samples": [],
+                "numeric_sample_count": 0,
+                "field_absent_sample_count": source.get("count", 0),
+                "empty_value_sample_count": 0,
+                "non_numeric_sample_count": 0,
+                "ambiguous_sample_count": 0,
+                "scanned_sample_count": source.get("count", 0),
+                "total_matching_sample_count": source.get(
+                    "total_matches", source.get("count", 0)
+                ),
+                "scan_complete": bool(source.get("scan_complete", True)),
+                "scan_truncated": bool(source.get("scan_truncated", False)),
+                "evidence": source.get("evidence", []),
+                "warnings": source.get("warnings", []),
+            }
+
+        canonical_metric = str(binding.get("canonical") or target_metric).strip()
+        canonical_section = str(binding.get("section") or "performance").strip()
+        section_label = material_section_label(canonical_section)
+        canonical_key = normalize_field_name(canonical_metric)
         ranked = []
         excluded = []
         units: set[str] = set()
+        unitless_numeric_count = 0
+        field_absent_count = 0
+        empty_value_count = 0
+        non_numeric_count = 0
+        ambiguous_count = 0
         for item in source.get("samples") or []:
             sample = item.get("sample") or {}
             matches = [
-                field for field in (item.get("performance") or [])
-                if str(field.get("name") or field.get("raw_key") or "").strip() == target_metric
+                field for field in (item.get(canonical_section) or [])
+                if normalize_field_name(
+                    field.get("name") or field.get("raw_key") or ""
+                ) == canonical_key
             ]
+            if not matches:
+                field_absent_count += 1
+                excluded.append({"sample": sample, "reason": f"目标{section_label}字段未记录"})
+                continue
             if len(matches) != 1:
-                excluded.append({"sample": sample, "reason": "目标性能缺失或不唯一"})
+                ambiguous_count += 1
+                excluded.append({"sample": sample, "reason": f"目标{section_label}字段记录不唯一"})
                 continue
             field = matches[0]
+            if cls._series_value_is_missing(field.get("value")):
+                empty_value_count += 1
+                excluded.append({"sample": sample, "reason": f"目标{section_label}字段值缺失"})
+                continue
             value = cls._to_decimal(field.get("value"))
             if value is None:
-                excluded.append({"sample": sample, "reason": "目标性能不是可排序数值"})
+                non_numeric_count += 1
+                excluded.append({"sample": sample, "reason": f"目标{section_label}字段不是可排序数值"})
                 continue
             unit = str(field.get("unit") or "").strip()
             if unit:
                 units.add(unit)
+            else:
+                unitless_numeric_count += 1
             ranked.append({"sample": sample, "value": str(value), "unit": unit or None, "_value": value})
 
-        unit_mismatch = len(units) > 1
+        numeric_sample_count = len(ranked)
+        unit_mismatch = len(units) > 1 or (bool(units) and unitless_numeric_count > 0)
         if unit_mismatch:
             ranked = []
         else:
@@ -715,13 +806,31 @@ class MaterialIntelligenceSkill:
         for row in ranked:
             row.pop("_value", None)
         return {
-            "status": "unit_mismatch" if unit_mismatch else "ok",
+            "status": (
+                "unit_mismatch"
+                if unit_mismatch
+                else "no_numeric_values"
+                if numeric_sample_count == 0
+                else "ok"
+            ),
             "analysis_type": "performance_rank",
-            "target_metric": target_metric,
+            "requested_target_metric": target_metric,
+            "target_metric": canonical_metric,
+            "target_section": canonical_section,
+            "target_section_label": section_label,
+            "field_binding": binding,
+            "available_fields": available_fields,
             "order": "asc" if order == "asc" else "desc",
             "ranking": ranked,
             "observed_units": sorted(units),
+            "unitless_numeric_count": unitless_numeric_count,
             "excluded_samples": excluded,
+            "numeric_sample_count": numeric_sample_count,
+            "field_absent_sample_count": field_absent_count,
+            "empty_value_sample_count": empty_value_count,
+            "non_numeric_sample_count": non_numeric_count,
+            "ambiguous_sample_count": ambiguous_count,
+            "excluded_sample_count": len(excluded),
             "scanned_sample_count": source.get("count", 0),
             "total_matching_sample_count": source.get("total_matches", source.get("count", 0)),
             "scan_limit": source.get("scan_limit"),
@@ -729,7 +838,10 @@ class MaterialIntelligenceSkill:
             "scan_page_count": source.get("scan_page_count", 1),
             "scan_complete": bool(source.get("scan_complete", True)),
             "scan_truncated": bool(source.get("scan_truncated", False)),
-            "ranking_basis": "按数据库样品记录排名；相同样品名称的不同 ID 不会自动合并。",
+            "ranking_basis": (
+                f"按数据库中的{section_label}字段“{canonical_metric}”排名；"
+                "相同样品名称的不同 ID 不会自动合并。"
+            ),
             "calculation_policy": "排序由后端 Decimal 确定性计算；不同单位不会混排。",
             "evidence": source.get("evidence", []),
             "warnings": source.get("warnings", []),
@@ -741,41 +853,97 @@ class MaterialIntelligenceSkill:
         source: dict[str, Any],
         *,
         target_metric: str,
+        target_section: str = "auto",
     ) -> dict[str, Any]:
+        catalog = build_material_field_catalog(source)
+        binding = bind_metric_to_catalog(target_metric, catalog, section=target_section)
+        available_fields = [
+            {
+                "section": section,
+                "section_label": material_section_label(section),
+                "name": str(item.get("name") or "").strip(),
+            }
+            for section in ("formula", "process", "performance")
+            for item in (catalog.get("sections") or {}).get(section, [])
+            if str(item.get("name") or "").strip()
+        ]
+        if binding.get("status") != "ok":
+            return {
+                "status": binding.get("status", "field_not_found"),
+                "analysis_type": "performance_statistics",
+                "requested_target_metric": target_metric,
+                "target_metric": target_metric,
+                "target_section": None,
+                "target_section_label": None,
+                "field_binding": binding,
+                "requested_statistics": ["mean"],
+                "statistics": {},
+                "unit": None,
+                "observed_units": [],
+                "unitless_numeric_count": 0,
+                "numeric_sample_count": 0,
+                "missing_sample_count": source.get("count", 0),
+                "field_absent_sample_count": source.get("count", 0),
+                "empty_value_sample_count": 0,
+                "non_numeric_sample_count": 0,
+                "ambiguous_sample_count": 0,
+                "excluded_sample_count": source.get("count", 0),
+                "missing_samples": [],
+                "non_numeric_samples": [],
+                "ambiguous_samples": [],
+                "available_fields": available_fields,
+                "available_performance_metrics": sorted(
+                    item["name"] for item in available_fields
+                    if item["section"] == "performance"
+                ),
+                "scanned_sample_count": source.get("count", 0),
+                "total_matching_sample_count": source.get(
+                    "total_matches", source.get("count", 0)
+                ),
+                "scan_complete": bool(source.get("scan_complete", True)),
+                "scan_truncated": bool(source.get("scan_truncated", False)),
+                "evidence": source.get("evidence", []),
+                "warnings": source.get("warnings", []),
+            }
+
+        canonical_metric = str(binding.get("canonical") or target_metric).strip()
+        canonical_section = str(binding.get("section") or "performance").strip()
+        section_label = material_section_label(canonical_section)
+        canonical_key = normalize_field_name(canonical_metric)
         values: list[Decimal] = []
         missing_samples: list[dict[str, Any]] = []
         non_numeric_samples: list[dict[str, Any]] = []
         ambiguous_samples: list[dict[str, Any]] = []
         observed_units: set[str] = set()
         unitless_numeric_count = 0
-        available_metrics: set[str] = set()
+        field_absent_count = 0
+        empty_value_count = 0
 
         for item in source.get("samples") or []:
             sample = item.get("sample") or {}
-            performance = item.get("performance") or []
-            for field in performance:
-                name = str(field.get("name") or field.get("raw_key") or "").strip()
-                if name:
-                    available_metrics.add(name)
+            section_fields = item.get(canonical_section) or []
             matches = [
                 field
-                for field in performance
-                if str(field.get("name") or field.get("raw_key") or "").strip()
-                == target_metric
+                for field in section_fields
+                if normalize_field_name(
+                    field.get("name") or field.get("raw_key") or ""
+                ) == canonical_key
             ]
             if not matches:
-                missing_samples.append({"sample": sample, "reason": "目标性能未记录"})
+                field_absent_count += 1
+                missing_samples.append({"sample": sample, "reason": f"目标{section_label}字段未记录"})
                 continue
             if len(matches) != 1:
-                ambiguous_samples.append({"sample": sample, "reason": "目标性能记录不唯一"})
+                ambiguous_samples.append({"sample": sample, "reason": f"目标{section_label}字段记录不唯一"})
                 continue
             field = matches[0]
             if cls._series_value_is_missing(field.get("value")):
-                missing_samples.append({"sample": sample, "reason": "目标性能值缺失"})
+                empty_value_count += 1
+                missing_samples.append({"sample": sample, "reason": f"目标{section_label}字段值缺失"})
                 continue
             value = cls._to_decimal(field.get("value"))
             if value is None:
-                non_numeric_samples.append({"sample": sample, "reason": "目标性能不是数值"})
+                non_numeric_samples.append({"sample": sample, "reason": f"目标{section_label}字段不是数值"})
                 continue
             unit = str(field.get("unit") or "").strip()
             if unit:
@@ -809,7 +977,11 @@ class MaterialIntelligenceSkill:
         return {
             "status": status,
             "analysis_type": "performance_statistics",
-            "target_metric": target_metric,
+            "requested_target_metric": target_metric,
+            "target_metric": canonical_metric,
+            "target_section": canonical_section,
+            "target_section_label": section_label,
+            "field_binding": binding,
             "requested_statistics": ["mean"],
             "statistics": statistics,
             "unit": next(iter(observed_units)) if len(observed_units) == 1 else None,
@@ -817,6 +989,8 @@ class MaterialIntelligenceSkill:
             "unitless_numeric_count": unitless_numeric_count,
             "numeric_sample_count": len(values),
             "missing_sample_count": len(missing_samples),
+            "field_absent_sample_count": field_absent_count,
+            "empty_value_sample_count": empty_value_count,
             "non_numeric_sample_count": len(non_numeric_samples),
             "ambiguous_sample_count": len(ambiguous_samples),
             "excluded_sample_count": (
@@ -827,7 +1001,11 @@ class MaterialIntelligenceSkill:
             "missing_samples": missing_samples,
             "non_numeric_samples": non_numeric_samples,
             "ambiguous_samples": ambiguous_samples,
-            "available_performance_metrics": sorted(available_metrics),
+            "available_fields": available_fields,
+            "available_performance_metrics": sorted(
+                item["name"] for item in available_fields
+                if item["section"] == "performance"
+            ),
             "scanned_sample_count": source.get("count", 0),
             "total_matching_sample_count": source.get(
                 "total_matches", source.get("count", 0)

@@ -103,8 +103,8 @@ _INTENT_PROGRESS_NAMES = {
     "formula_difference": "比较样品配方差异",
     "process_difference": "比较样品工艺差异",
     "comparability_check": "检查样品测试可比性",
-    "performance_rank": "按性能筛选与排序",
-    "performance_statistics": "计算性能平均值",
+    "performance_rank": "按字段筛选与排序",
+    "performance_statistics": "计算字段平均值",
     "experiment_series_analysis": "分析实验系列",
     "data_quality_check": "检查数据质量",
     "find_samples_multi_condition": "按多个条件筛选样品",
@@ -126,6 +126,7 @@ def _intent_progress_details(intent: str, tool_args: dict[str, Any]) -> list[dic
         "left_identifier": "左侧样品",
         "right_identifier": "右侧样品",
         "target_metric": "关注指标",
+        "target_section": "字段类别",
         "keyword": "检索关键词",
         "similarity_scope": "相似范围",
         "top_n": "返回数量",
@@ -173,10 +174,34 @@ def _route_round2a2_database_intent(
         return None
     decision = rule_router.route(text)
     if decision is not None and decision.intent in _ROUND2A_DATABASE_INTENTS:
-        return decision
+        # Ranking still executes through the protected business-MySQL tool,
+        # but its metric is a semantic parameter.  Do not let this early rule
+        # route freeze a raw sentence substring as target_metric before
+        # DeepSeek + the authorized field catalog can validate it.
+        if decision.intent != "performance_rank":
+            return decision
     return DeepSeekIntentRouter.deterministic_material_followup_decision(
         text,
         history or [],
+    )
+
+
+def _needs_authorized_field_catalog(message: str) -> bool:
+    """Load the value-free catalog for field-bound semantic requests.
+
+    Ranking is intentionally detected only at the task level here.  This
+    helper does not extract or trim target_metric, so request wording cannot be
+    accidentally promoted into a database field name.
+    """
+    text = str(message or "").strip()
+    if looks_like_multi_condition_request(text):
+        return True
+    return bool(
+        "样品" in text
+        and any(
+            marker in text.lower()
+            for marker in ("最好", "最高", "最低", "排序", "排名", "前几", "top")
+        )
     )
 
 
@@ -692,7 +717,7 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
         )
 
     field_catalog = None
-    if looks_like_multi_condition_request(body.message):
+    if _needs_authorized_field_catalog(body.message):
         emit_progress(
             "schema_loading",
             "running",
@@ -707,14 +732,14 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(
                 status_code=500,
                 detail=(
-                    "Round 2B-1.1 授权字段目录读取失败："
+                    "授权字段目录读取失败："
                     f"{type(exc).__name__}: {exc}"
                 ),
             ) from exc
         if not isinstance(field_catalog, dict) or field_catalog.get("status") != "ok":
             raise HTTPException(
                 status_code=500,
-                detail="Round 2B-1.1 授权字段目录不完整，已停止 Schema-Aware 路由。",
+                detail="授权字段目录不完整，已停止字段感知语义路由。",
             )
         emit_progress(
             "schema_loading",
@@ -1701,7 +1726,7 @@ def _execute_chat_ui_legacy(
         )
 
     field_catalog = None
-    if looks_like_multi_condition_request(body.message):
+    if _needs_authorized_field_catalog(body.message):
         emit_progress(
             "schema_loading",
             "running",
@@ -1716,14 +1741,14 @@ def _execute_chat_ui_legacy(
             raise HTTPException(
                 status_code=500,
                 detail=(
-                    "Round 2B-1.1 授权字段目录读取失败："
+                    "授权字段目录读取失败："
                     f"{type(exc).__name__}: {exc}"
                 ),
             ) from exc
         if not isinstance(field_catalog, dict) or field_catalog.get("status") != "ok":
             raise HTTPException(
                 status_code=500,
-                detail="Round 2B-1.1 授权字段目录不完整，已停止 Schema-Aware 路由。",
+                detail="授权字段目录不完整，已停止字段感知语义路由。",
             )
         emit_progress(
             "schema_loading",

@@ -143,7 +143,8 @@ class AgentCore:
 - 缺失字段数量只能引用 field_summary.missing_field_count 或 project_groups[*].field_summary.missing_field_count，不得由模型自行数数组后写“约多少项”。
 - 若结构化 formula 为空但工艺文本包含配比，只能写“未提供可解析的结构化配方，工艺文本含配比描述”，不能笼统写“未提供配方”。
 - performance_rank 必须引用 scanned_sample_count / total_matching_sample_count；正常情况通过分页读取全部匹配记录，scan_truncated=true 时不得声称是全部授权数据的最终排名。
-- performance_statistics 的平均值、有效数值数、缺失数、非数值数和单位只能引用后端返回结果；不得自行重算。scan_truncated=true 时只能称为“已读取记录的平均值”，不得称为全部授权样品平均值。
+- performance_rank 虽保留兼容名称，但目标可以属于配方、工艺或性能；必须使用后端绑定后的 target_section/target_metric，并分别引用 numeric_sample_count、field_absent_sample_count、empty_value_sample_count、non_numeric_sample_count、ambiguous_sample_count；不得把字段出现数说成有效数值数，也不得把所有排除原因笼统写成“缺失”。
+- performance_statistics 虽保留兼容名称，但目标可以属于配方、工艺或性能；平均值、字段类别、有效数值数、缺失数、非数值数和单位只能引用后端返回结果，不得自行重算。scan_truncated=true 时只能称为“已读取记录的平均值”，不得称为全部授权样品平均值。
 - 排名按数据库记录进行；同名不同 ID 是不同记录，不得擅自去重。
 - similar_samples 的相似度、字段覆盖率、归一化距离和排名只能引用 Tool Result，不得由模型重算。
 - similar_samples 必须说明所用范围是配方、工艺或综合，并说明这是结构化数值接近度，不代表机理相同、性能等价或因果关系。
@@ -362,9 +363,31 @@ class AgentCore:
                 return "\n".join(line for line in lines if line)
 
         if intent == "performance_rank":
+            metric = str(result.get("target_metric") or result.get("requested_target_metric") or "目标字段")
+            section_label = str(result.get("target_section_label") or "字段")
+            available_fields = result.get("available_fields") or []
+            available = "、".join(
+                f"{item.get('section_label')}.{item.get('name')}"
+                for item in available_fields[:20]
+            )
+            if status == "field_not_found":
+                suffix = f" 当前可见字段示例：{available}。" if available else ""
+                return f"没有在当前授权字段目录中找到配方、工艺或性能字段“{metric}”。" + suffix
+            if status == "ambiguous_field":
+                candidates = "、".join((result.get("field_binding") or {}).get("candidates") or [])
+                return f"字段“{metric}”对应多个类别（{candidates or '候选未明确'}），请明确是配方、工艺还是性能。"
             if status == "unit_mismatch":
-                return "目标性能存在多个单位，已停止混合排序：" + "、".join(result.get("observed_units", []))
-            lines = [f"【{result.get('target_metric')}排序】"]
+                return f"目标{section_label}字段存在多个或缺失单位，已停止混合排序：" + "、".join(result.get("observed_units", []))
+            if status == "no_numeric_values":
+                return (
+                    f"已找到{section_label}字段“{metric}”，但没有可用于排序的唯一有效数值。"
+                    f"共扫描 {result.get('scanned_sample_count', 0)} 条："
+                    f"字段未记录 {result.get('field_absent_sample_count', 0)} 条，"
+                    f"空值 {result.get('empty_value_sample_count', 0)} 条，"
+                    f"非数值 {result.get('non_numeric_sample_count', 0)} 条，"
+                    f"重复字段 {result.get('ambiguous_sample_count', 0)} 条。"
+                )
+            lines = [f"【{section_label} · {result.get('target_metric')}排序】"]
             for index, row in enumerate(result.get("ranking", []), 1):
                 sample = row.get("sample") or {}
                 lines.append(f"{index}. {sample.get('id')}（{sample.get('name')}）：{row.get('value')} {row.get('unit') or ''}".strip())
@@ -372,14 +395,30 @@ class AgentCore:
             lines.append(
                 f"扫描 {result.get('scanned_sample_count', 0)} / "
                 f"{result.get('total_matching_sample_count', result.get('scanned_sample_count', 0))} 个匹配样品；"
-                f"排除 {len(result.get('excluded_samples', []))} 个缺失或非数值记录。"
+                f"有效数值 {result.get('numeric_sample_count', 0)} 条；"
+                f"字段未记录 {result.get('field_absent_sample_count', 0)} 条，"
+                f"空值 {result.get('empty_value_sample_count', 0)} 条，"
+                f"非数值 {result.get('non_numeric_sample_count', 0)} 条，"
+                f"重复字段 {result.get('ambiguous_sample_count', 0)} 条。"
             )
             if result.get("scan_truncated"):
                 lines.append("分页读取未完整结束；当前结果只代表已读取记录，不代表全部授权数据的最终排名。")
             return "\n".join(lines)
 
         if intent == "performance_statistics":
-            metric = str(result.get("target_metric") or "目标性能")
+            metric = str(result.get("target_metric") or "目标字段")
+            section_label = str(result.get("target_section_label") or "字段")
+            available_fields = result.get("available_fields") or []
+            available = "、".join(
+                f"{item.get('section_label')}.{item.get('name')}"
+                for item in available_fields[:20]
+            )
+            if status == "field_not_found":
+                suffix = f" 当前可见字段示例：{available}。" if available else ""
+                return f"没有在当前授权字段目录中找到配方、工艺或性能字段“{metric}”。" + suffix
+            if status == "ambiguous_field":
+                candidates = "、".join((result.get("field_binding") or {}).get("candidates") or [])
+                return f"字段“{metric}”对应多个类别（{candidates or '候选未明确'}），请明确是配方、工艺还是性能。"
             if status == "unit_mismatch":
                 units = "、".join(result.get("observed_units") or []) or "存在缺失单位"
                 if result.get("unitless_numeric_count"):
@@ -389,10 +428,14 @@ class AgentCore:
                     "系统没有混合单位计算。"
                 )
             if status == "no_numeric_values":
-                available = "、".join(result.get("available_performance_metrics") or [])
-                suffix = f" 当前可见性能字段包括：{available}。" if available else ""
+                suffix = f" 当前可见字段示例：{available}。" if available else ""
                 return (
-                    f"当前公司和授权项目范围内没有可用于计算{metric}平均值的数值记录。"
+                    f"已找到{section_label}字段“{metric}”，但没有可用于计算平均值的唯一有效数值。"
+                    f"共扫描 {result.get('scanned_sample_count', 0)} 条："
+                    f"字段未记录 {result.get('field_absent_sample_count', 0)} 条，"
+                    f"空值 {result.get('empty_value_sample_count', 0)} 条，"
+                    f"非数值 {result.get('non_numeric_sample_count', 0)} 条，"
+                    f"重复字段 {result.get('ambiguous_sample_count', 0)} 条。"
                     + suffix
                 )
             if status == "ok":
@@ -404,13 +447,14 @@ class AgentCore:
                     else "当前已读取的授权记录中"
                 )
                 lines = [
-                    f"{scope_text}，{metric}的平均值为 "
+                    f"{scope_text}，{section_label}字段“{metric}”的平均值为 "
                     f"{statistics.get('mean_display')}"
                     f"{(' ' + unit) if unit else ''}。",
                     (
                         f"共扫描 {result.get('scanned_sample_count', 0)} 条样品记录；"
                         f"其中 {result.get('numeric_sample_count', 0)} 条有效数值参与计算，"
-                        f"{result.get('missing_sample_count', 0)} 条缺失，"
+                        f"{result.get('field_absent_sample_count', 0)} 条未记录该字段，"
+                        f"{result.get('empty_value_sample_count', 0)} 条为空值，"
                         f"{result.get('non_numeric_sample_count', 0)} 条为非数值，"
                         f"{result.get('ambiguous_sample_count', 0)} 条目标字段不唯一。"
                     ),

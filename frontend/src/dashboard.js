@@ -13,6 +13,19 @@ export const FIELD_SECTION_LABELS={
   conditions:"测试条件",
 };
 
+export function isHistoricalImportProject(projectId){
+  const value=Number(projectId);
+  return Number.isInteger(value)&&value<0;
+}
+
+export function projectDisplayName(project){
+  const name=String(project?.name||"").trim();
+  if(name)return name;
+  const value=Number(project?.id);
+  if(Number.isInteger(value)&&value<0)return `历史导入项目 ${value}`;
+  return "未命名项目";
+}
+
 function sampleId(sample){
   const value=Number(sample?.id);
   return Number.isInteger(value)?String(value):"";
@@ -42,9 +55,9 @@ export function buildProjectPrompt(project){
 export function buildFieldPrompt(section,field){
   const name=String(field?.name||"").trim();
   if(!name)return "";
-  if(section==="formula")return `找${name}含量最高的样品`;
-  if(section==="performance")return `找${name}最高的样品`;
-  if(section==="process")return `找${name}最高的样品`;
+  if(section==="formula")return `找配方${name}最高的样品`;
+  if(section==="performance")return `找性能${name}最高的样品`;
+  if(section==="process")return `找工艺${name}最高的样品`;
   if(section==="conditions")return `找测试条件中包含${name}的样品`;
   return `查找与${name}有关的样品`;
 }

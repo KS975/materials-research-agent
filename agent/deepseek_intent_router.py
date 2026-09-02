@@ -12,6 +12,7 @@ from agent.conversation_context import (
 from agent.intent_v2 import DeepSeekIntentDecision, IntentToolPlanStep
 from agent.field_catalog import (
     bind_filters_to_catalog,
+    bind_metric_to_catalog,
     field_catalog_for_prompt,
 )
 from agent.multi_condition import (
@@ -350,8 +351,11 @@ class DeepSeekIntentRouter:
 这些意图的差值、相对变化、配方算术和、可比性等级由后端确定性计算，Router 不负责计算。
 
 1B) Materials Intent Round 2A-2（确定性集合分析）：
-- performance_rank：按明确性能指标对授权范围样品排序；参数 target_metric，可选 keyword/top_n/order；tool_name=list_samples_for_analysis。
-- performance_statistics：计算授权范围样品某个明确性能指标的平均值；参数 target_metric，requested_statistics=["mean"]，keyword 默认空字符串；tool_name=list_samples_for_analysis。缺失值、非数值、单位检查和平均值全部由后端计算。
+- performance_rank：兼容名称保留，但实际用于按明确的配方、工艺或性能字段对授权范围样品排序；参数 target_metric，可选 target_section="formula|process|performance"、keyword/top_n/order；tool_name=list_samples_for_analysis。
+- performance_statistics：兼容名称保留，但实际用于计算授权范围样品某个明确配方、工艺或性能字段的平均值；参数 target_metric，可选 target_section="formula|process|performance"，requested_statistics=["mean"]，keyword 默认空字符串；tool_name=list_samples_for_analysis。缺失值、非数值、单位检查和平均值全部由后端计算。
+- 字段类别必须按业务语义选择：原料/组分/含量/添加量/用量通常属于 formula，温度/时间等制造参数通常属于 process，强度/MFR/成本等测试结果属于 performance；若 authoritative field catalog 已给出唯一类别，必须服从目录。
+- target_metric 必须尽量使用字段目录中的 canonical 原名，不能自行追加“含量/添加量/数值/指标”等口语后缀。例如用户说“增韧剂含量最高”，目录为 formula.增韧剂时，应输出 target_section="formula", target_metric="增韧剂"，绝不能生成 performance.增韧剂含量。
+- DeepSeek 的类别和字段只是建议，后端仍会跨类别执行确定性二次绑定；存在同名歧义时必须停止并请求用户明确类别。
 - experiment_series_analysis：分析实验系列中的变量、常量和缺失；参数 keyword（如 N20260305）；tool_name=list_samples_for_analysis。
 - data_quality_check：检查授权范围或 keyword 范围内的缺失、重复、非数值和配方记录值算术和；tool_name=list_samples_for_analysis。
 - historical_similar_case：仅检索“以前有没有类似情况/案例”的历史 Knowledge；tool_name=null。若明确针对单一样品，使用 sample_historical_similarity。
@@ -595,6 +599,13 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             context_reference=context_reference,
         )
         args = self._sanitize_tool_args(intent=intent, args=args)
+        rank_field_binding: dict[str, Any] | None = None
+        if intent == "performance_rank":
+            args, rank_field_binding = self._normalize_rank_metric_args(
+                args,
+                field_catalog,
+            )
+
         filter_validation_errors: list[str] = []
         filter_bindings: list[dict[str, Any]] = []
         if intent == "find_samples_multi_condition":
@@ -640,6 +651,19 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                     "source_sample_count": field_catalog.get("source_sample_count", 0),
                     "contains_values": False,
                 }
+        elif intent == "performance_rank":
+            scope["data_source"] = "business_mysql"
+            constraints.update({
+                "read_only": True,
+                "deterministic_ranking": True,
+                "catalog_validated_metric": bool(
+                    rank_field_binding
+                    and rank_field_binding.get("status") == "ok"
+                ),
+                "arbitrary_sql": False,
+            })
+            if rank_field_binding:
+                constraints["field_binding"] = rank_field_binding
         elif intent == "similar_samples":
             scope["data_source"] = "business_mysql"
             constraints.update({
@@ -998,10 +1022,30 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
 
         if intent == "performance_rank":
             text = str(message or "")
-            if not str(result.get("target_metric") or "").strip():
+            # Parameter extraction belongs to the semantic router first.  Keep
+            # a clean model-proposed metric instead of unconditionally
+            # replacing it with a substring cut from the full user sentence.
+            # The deterministic extractor remains a fallback for a missing
+            # metric (or an obviously wrapped model value such as “找拉伸强度”).
+            model_metric = str(result.get("target_metric") or "").strip()
+            wrapped_model_metric = bool(
+                model_metric
+                and RuleIntentRouter._rank_request_prefix.match(model_metric)
+            )
+            if not model_metric or wrapped_model_metric:
                 metric = RuleIntentRouter.extract_rank_metric(text)
                 if metric:
                     result["target_metric"] = metric
+            if re.search(r"(?:配方|原料|组分)", text):
+                result["target_section"] = "formula"
+            elif re.search(r"(?:工艺|过程)", text):
+                result["target_section"] = "process"
+            elif re.search(r"(?:性能|测试结果)", text):
+                result["target_section"] = "performance"
+            else:
+                # Do not trust a model-invented category. The backend field
+                # catalogue performs the authoritative cross-section binding.
+                result.pop("target_section", None)
             top_match = re.search(r"(?:前|top)\s*(\d+)", text, re.I)
             result.setdefault("top_n", int(top_match.group(1)) if top_match else 10)
             result.setdefault("order", "asc" if "最低" in text else "desc")
@@ -1015,6 +1059,14 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             else:
                 result.setdefault("requested_statistics", ["mean"])
                 result.setdefault("keyword", "")
+            if re.search(r"(?:配方|原料|组分)", text):
+                result["target_section"] = "formula"
+            elif re.search(r"(?:工艺|过程)", text):
+                result["target_section"] = "process"
+            elif re.search(r"(?:性能|测试结果)", text):
+                result["target_section"] = "performance"
+            else:
+                result.pop("target_section", None)
 
         if intent == "similar_samples":
             text = str(message or "")
@@ -1038,6 +1090,34 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             result.setdefault("keyword", "")
 
         return result
+
+    @staticmethod
+    def _normalize_rank_metric_args(
+        args: dict[str, Any],
+        field_catalog: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Validate a semantic rank metric against the authorized field catalog.
+
+        The LLM may understand a user phrase such as “增韧剂含量” and propose
+        the canonical “增韧剂”.  When a catalog is available it, not a raw
+        sentence substring, is the final authority for section/name binding.
+        No fuzzy guessing is introduced here.
+        """
+        result = dict(args)
+        metric = str(result.get("target_metric") or "").strip()
+        if not metric or not field_catalog or field_catalog.get("status") != "ok":
+            return result, None
+
+        requested_section = str(result.get("target_section") or "auto").strip()
+        binding = bind_metric_to_catalog(
+            metric,
+            field_catalog,
+            section=requested_section,
+        )
+        if binding.get("status") == "ok":
+            result["target_metric"] = str(binding.get("canonical") or metric).strip()
+            result["target_section"] = str(binding.get("section") or "").strip()
+        return result, binding
 
     @staticmethod
     def _normalize_multi_condition_args(
@@ -1150,9 +1230,10 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                 "right_identifier",
                 "target_metric",
             },
-            "performance_rank": {"target_metric", "keyword", "top_n", "order", "scan_limit"},
+            "performance_rank": {"target_metric", "target_section", "keyword", "top_n", "order", "scan_limit"},
             "performance_statistics": {
                 "target_metric",
+                "target_section",
                 "requested_statistics",
                 "keyword",
                 "scan_limit",

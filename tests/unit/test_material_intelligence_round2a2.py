@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 from agent.deepseek_intent_router import DeepSeekIntentRouter
+from agent.field_catalog import build_material_field_catalog
 from agent.router import RuleIntentRouter
 from schemas.user_context import UserContext
 from skills.material_intelligence import MaterialIntelligenceSkill
@@ -273,6 +274,9 @@ def test_rank_router_strips_request_fillers_and_keeps_top_n():
         "请给我冲击强度最高的前5个样品",
         "帮我找冲击强度最高的前5个样品",
         "麻烦给我冲击强度最高的前5个样品",
+        "找冲击强度最高的前5个样品",
+        "哪个样品冲击强度最高的前5个",
+        "所有样品中冲击强度最高的前5个",
     ):
         decision = router.route(message)
         assert decision.intent == "performance_rank"
@@ -338,6 +342,203 @@ def test_deepseek_router_fallback_uses_same_rank_metric_normalization():
     assert decision.intent == "performance_rank"
     assert decision.tool_args["target_metric"] == "冲击强度"
     assert decision.tool_args["top_n"] == 5
+
+
+def test_deepseek_rank_metric_cannot_keep_dashboard_request_verb():
+    decision = DeepSeekIntentRouter(FakeLLM({
+        "domain": "analyze",
+        "primary_intent": "performance_rank",
+        "tool_name": "list_samples_for_analysis",
+        "tool_args": {"target_metric": "找拉伸强度"},
+        "needs_clarification": False,
+    })).route("找拉伸强度最高的样品")
+    assert decision.intent == "performance_rank"
+    assert decision.tool_args["target_metric"] == "拉伸强度"
+
+
+def test_deepseek_rank_drops_model_invented_section_and_keeps_explicit_user_section():
+    router = DeepSeekIntentRouter(FakeLLM({
+        "domain": "analyze",
+        "primary_intent": "performance_rank",
+        "tool_name": "list_samples_for_analysis",
+        "tool_args": {"target_metric": "增韧剂含量", "target_section": "performance"},
+        "needs_clarification": False,
+    }))
+    inferred = router.route("找增韧剂含量最高的样品")
+    assert "target_section" not in inferred.tool_args
+
+    explicit = router.route("找配方增韧剂最高的样品")
+    assert explicit.tool_args["target_section"] == "formula"
+
+
+def test_rank_binds_canonical_metric_and_reports_quality_reasons():
+    payload = {
+        "status": "ok",
+        "count": 5,
+        "total_matches": 5,
+        "samples": [
+            {"sample": {"id": 1, "name": "A"}, "performance": [field("拉伸强度", "52", "MPa")]},
+            {"sample": {"id": 2, "name": "B"}, "performance": [field("拉伸强度", "", "MPa")]},
+            {"sample": {"id": 3, "name": "C"}, "performance": [field("拉伸强度", "待复测", "MPa")]},
+            {"sample": {"id": 4, "name": "D"}, "performance": [field("拉伸强度", "45", "MPa"), field("拉伸强度", "46", "MPa")]},
+            {"sample": {"id": 5, "name": "E"}, "performance": [field("冲击强度", "24", "kJ/m²")]},
+        ],
+        "warnings": [],
+        "evidence": [],
+    }
+    result = MaterialIntelligenceSkill(FakeRegistry(payload)).execute_intent(
+        "performance_rank",
+        "list_samples_for_analysis",
+        {"target_metric": "找性能拉伸强度指标最高", "top_n": 5},
+        ctx(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["requested_target_metric"] == "找性能拉伸强度指标最高"
+    assert result["target_metric"] == "拉伸强度"
+    assert result["field_binding"]["status"] == "ok"
+    assert [row["sample"]["id"] for row in result["ranking"]] == [1]
+    assert result["numeric_sample_count"] == 1
+    assert result["field_absent_sample_count"] == 1
+    assert result["empty_value_sample_count"] == 1
+    assert result["non_numeric_sample_count"] == 1
+    assert result["ambiguous_sample_count"] == 1
+
+    catalog = build_material_field_catalog(payload)
+    tensile = next(
+        item for item in catalog["sections"]["performance"]
+        if item["name"] == "拉伸强度"
+    )
+    assert tensile["observed_sample_count"] == 4
+    assert tensile["numeric_sample_count"] == 1
+    assert tensile["empty_value_sample_count"] == 1
+    assert tensile["non_numeric_sample_count"] == 1
+    assert tensile["ambiguous_sample_count"] == 1
+
+
+def test_rank_binds_formula_quantity_suffix_to_canonical_formula_field():
+    payload = {
+        "status": "ok",
+        "count": 3,
+        "total_matches": 3,
+        "samples": [
+            {"sample": {"id": 1, "name": "A"}, "formula": [field("增韧剂", "12", "%")]},
+            {"sample": {"id": 2, "name": "B"}, "formula": [field("增韧剂", "28", "%")]},
+            {"sample": {"id": 3, "name": "C"}, "formula": [field("PC", "60", "%")]},
+        ],
+        "warnings": [],
+        "evidence": [],
+    }
+    result = MaterialIntelligenceSkill(FakeRegistry(payload)).execute_intent(
+        "performance_rank",
+        "list_samples_for_analysis",
+        {"target_metric": "增韧剂含量", "top_n": 10},
+        ctx(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["target_section"] == "formula"
+    assert result["target_section_label"] == "配方"
+    assert result["target_metric"] == "增韧剂"
+    assert [row["sample"]["id"] for row in result["ranking"]] == [2, 1]
+    assert result["field_absent_sample_count"] == 1
+
+    catalog = build_material_field_catalog(payload)
+    additive = next(
+        item for item in catalog["sections"]["formula"]
+        if item["name"] == "增韧剂"
+    )
+    assert additive["numeric_sample_count"] == 2
+
+
+def test_rank_and_average_bind_process_and_formula_fields():
+    payload = {
+        "status": "ok",
+        "count": 2,
+        "total_matches": 2,
+        "samples": [
+            {
+                "sample": {"id": 1, "name": "A"},
+                "formula": [field("PC", "40", "%")],
+                "process": [field("注塑温度", "220", "℃")],
+            },
+            {
+                "sample": {"id": 2, "name": "B"},
+                "formula": [field("PC", "60", "%")],
+                "process": [field("注塑温度", "240", "℃")],
+            },
+        ],
+        "warnings": [],
+        "evidence": [],
+    }
+    skill = MaterialIntelligenceSkill(FakeRegistry(payload))
+    ranking = skill.execute_intent(
+        "performance_rank",
+        "list_samples_for_analysis",
+        {"target_metric": "工艺注塑温度", "target_section": "process"},
+        ctx(),
+    )
+    mean = skill.execute_intent(
+        "performance_statistics",
+        "list_samples_for_analysis",
+        {"target_metric": "PC含量"},
+        ctx(),
+    )
+
+    assert ranking["target_section"] == "process"
+    assert ranking["target_metric"] == "注塑温度"
+    assert [row["sample"]["id"] for row in ranking["ranking"]] == [2, 1]
+    assert mean["status"] == "ok"
+    assert mean["target_section"] == "formula"
+    assert mean["target_metric"] == "PC"
+    assert mean["statistics"]["mean_display"] == "50"
+
+
+def test_cross_section_same_name_requires_explicit_category():
+    payload = {
+        "status": "ok",
+        "count": 1,
+        "total_matches": 1,
+        "samples": [{
+            "sample": {"id": 1, "name": "A"},
+            "formula": [field("指数", "1", "%")],
+            "performance": [field("指数", "2", "MPa")],
+        }],
+        "warnings": [],
+        "evidence": [],
+    }
+    result = MaterialIntelligenceSkill(FakeRegistry(payload)).execute_intent(
+        "performance_rank",
+        "list_samples_for_analysis",
+        {"target_metric": "指数"},
+        ctx(),
+    )
+    assert result["status"] == "ambiguous_field"
+    assert result["field_binding"]["candidates"] == ["配方.指数", "性能.指数"]
+
+
+def test_exact_performance_name_wins_before_formula_quantity_suffix_hint():
+    payload = {
+        "status": "ok",
+        "count": 1,
+        "total_matches": 1,
+        "samples": [{
+            "sample": {"id": 1, "name": "A"},
+            "formula": [field("氧", "1", "%")],
+            "performance": [field("氧含量", "2", "%")],
+        }],
+        "warnings": [],
+        "evidence": [],
+    }
+    result = MaterialIntelligenceSkill(FakeRegistry(payload)).execute_intent(
+        "performance_rank",
+        "list_samples_for_analysis",
+        {"target_metric": "氧含量"},
+        ctx(),
+    )
+    assert result["status"] == "ok"
+    assert result["target_section"] == "performance"
+    assert result["target_metric"] == "氧含量"
 
 
 def test_collection_tool_reads_all_pages_and_prefetches_definitions_once():

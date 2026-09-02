@@ -44,7 +44,7 @@ class RuleIntentRouter:
     _rank_request_prefix = re.compile(
         r"^(?:(?:请|麻烦)\s*)?"
         r"(?:给我|请给我|帮我找|帮我查|帮我|查一下|查询一下|"
-        r"看看|看一下|列出|列一下|统计一下)\s*"
+        r"看看|看一下|列出|列一下|统计一下|找|查|搜索)\s*"
     )
 
     def route(self, message: str) -> IntentDecision | None:
@@ -294,7 +294,8 @@ class RuleIntentRouter:
             previous = value
             value = cls._rank_request_prefix.sub("", value).strip()
         value = re.sub(
-            r"^(?:哪些|哪几个|所有|把|请把)?\s*(?:样品|样本)(?:的)?\s*",
+            r"^(?:哪些|哪几个|哪个|哪一个|所有|全部|全体|这些|把|请把)?\s*"
+            r"(?:样品|样本)(?:中|里|里面|的)?\s*",
             "",
             value,
         )

@@ -121,7 +121,7 @@ def _data_governance() -> SkillSpec:
     return SkillSpec(
         name="data_governance",
         display_name="Data Governance",
-        description="授权数据探查、统计、质量检查和实验系列结构分析。",
+        description="授权配方、工艺、性能数据的探查、统计、质量检查和实验系列结构分析。",
         intents=frozenset({
             "list_samples_for_analysis",
             "performance_rank",
@@ -143,6 +143,7 @@ def _data_governance() -> SkillSpec:
         },
         evidence_rules=(
             "统计量只能由后端确定性计算",
+            "排序和平均值必须先绑定唯一字段类别及真实字段名",
             "必须报告扫描范围、缺失值和单位一致性",
         ),
         guardrails=("不得把缺失值当作零", "不得跨单位聚合"),
