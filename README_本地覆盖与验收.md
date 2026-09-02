@@ -1,42 +1,34 @@
-# Skill Architecture V1 本地增量
+# Database Navigator V0.1.1 本地覆盖说明
+
+本增量修复数据库浏览遗漏负数项目编号的问题。
 
 ## 覆盖
 
-在项目根目录解压并覆盖同名文件。不要删除原目录中的其它文件。
+将压缩包内容按原目录覆盖到项目根目录。不会修改 `.env`、依赖版本或数据库结构。
 
-本包不包含也不会覆盖：
-
-- `.env`
-- `.runtime/chat_history`
-- 业务数据库配置
-- 前端源码或 `dist`
-
-## 启动前验证
+本地后端重启：
 
 ```powershell
-python -m pytest -q tests/unit/test_skill_registry_v1.py
-python -m pytest -q tests/unit/test_chat_ui_langgraph_v4.py
-python -m pytest -q tests/unit/test_material_intelligence_round2a1.py
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-启动后检查：
+如果使用前端开发服务器，重新启动 `npm run dev`。包内也包含已重新构建的 `frontend/dist`。
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/api/v1/skills
-```
+## 验收
 
-平台身份请求头模式下，该接口需要携带现有的 Authorization、company-id、
-organization-id、organization-level；本地开发模式继续使用现有开发身份配置。
-
-## 验收问题
+打开“数据库浏览 → 项目”，确认正数项目和负数历史导入项目同时出现，例如：
 
 ```text
-查看3811的完整信息
-所有样品的冲击强度平均值是多少
-找项目115里PC含量大于50%、注塑温度高于70℃的样品
-3811历史上有没有类似情况
-找和3811最像的5个样品
+PROJECT 115
+PROJECT -1539 · 历史导入
+PROJECT -1540 · 历史导入
 ```
 
-展开“查询与分析详情”后，应看到 `Skill 编排完成`，并显示 Skill、Operation、
-执行节点和固定 Workflow。
+点击负数项目“查看样品”，应只返回当前公司中对应 `project_id` 的样品。
+
+## 定向测试
+
+```powershell
+python -m pytest tests/unit/test_dashboard_v01.py -q
+node --test frontend/tests/dashboard.test.mjs frontend/tests/progress.test.mjs
+```

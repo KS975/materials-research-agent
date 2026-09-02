@@ -1,3 +1,11 @@
+# Database Navigator V0.1.1 - 历史导入项目
+
+- 数据库项目目录不再只依赖 `mat_project`，同时纳入当前公司样品实际引用的 `project_id`。
+- `project_id < 0` 作为合法的历史导入项目展示，不再被项目浏览页遗漏。
+- 历史导入项目没有独立项目主表记录时，生成只读的项目卡片和名称，不伪造项目档案。
+- 概览增加历史导入项目计数，项目、样品和详情页统一显示“历史导入”标识。
+- 项目目录、样品筛选和详情仍强制继承 `UserContext.company_id` 与项目权限范围。
+
 # Skill Architecture V1
 
 - 新增 `SkillRegistry`：operation 唯一归属、输入/输出 Schema、Tool 白名单、证据规则、护栏、审批点和异常策略。

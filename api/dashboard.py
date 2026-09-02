@@ -57,11 +57,25 @@ def _get_field_catalog(
 
 
 def _sample_card(row: dict[str, Any]) -> dict[str, Any]:
+    project_id = row.get("project_id")
+    try:
+        is_historical_import = int(project_id) < 0
+    except (TypeError, ValueError):
+        is_historical_import = False
     return {
         "id": int(row["id"]),
         "name": row.get("name"),
-        "project_id": row.get("project_id"),
-        "project_name": row.get("project_name"),
+        "project_id": project_id,
+        "project_name": row.get("project_name") or (
+            f"历史导入项目 {project_id}" if is_historical_import else None
+        ),
+        "project_origin": (
+            "history_import"
+            if is_historical_import
+            else str(row.get("project_origin") or "standard")
+        ),
+        "is_historical_import": is_historical_import,
+        "has_project_record": bool(row.get("has_project_record")),
         "sample_type": row.get("sample_type"),
         "create_time": row.get("create_time"),
         "update_time": row.get("update_time"),
@@ -74,6 +88,26 @@ def _sample_card(row: dict[str, Any]) -> dict[str, Any]:
             ),
             "conditions": len(decode_json_mapping(row.get("conditions"))),
         },
+    }
+
+
+def _project_card(row: dict[str, Any]) -> dict[str, Any]:
+    project_id = int(row["id"])
+    is_historical_import = project_id < 0
+    return {
+        **row,
+        "id": project_id,
+        "name": row.get("name") or (
+            f"历史导入项目 {project_id}" if is_historical_import else None
+        ),
+        "sample_count": int(row.get("sample_count") or 0),
+        "project_origin": (
+            "history_import"
+            if is_historical_import
+            else str(row.get("project_origin") or "standard")
+        ),
+        "is_historical_import": is_historical_import,
+        "has_project_record": bool(row.get("has_project_record")),
     }
 
 
@@ -97,15 +131,17 @@ def dashboard_projects(
     ctx: UserContext = Depends(resolve_user_context),
     container: ApplicationContainer = Depends(get_container),
 ):
+    result = container.dashboard.list_projects(
+        ctx,
+        query=q,
+        limit=limit,
+        offset=offset,
+    )
     return {
         "status": "ok",
         "scope": _scope_payload(ctx),
-        **container.dashboard.list_projects(
-            ctx,
-            query=q,
-            limit=limit,
-            offset=offset,
-        ),
+        **result,
+        "projects": [_project_card(row) for row in result["projects"]],
     }
 
 

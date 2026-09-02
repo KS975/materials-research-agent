@@ -5,6 +5,8 @@ import {
   buildFieldPrompt,
   buildProjectPrompt,
   buildSamplePrompt,
+  isHistoricalImportProject,
+  projectDisplayName,
 } from "../src/dashboard.js";
 
 
@@ -24,6 +26,15 @@ test("two selected samples produce explicit identifiers",()=>{
 
 test("project and field selections become useful questions",()=>{
   assert.equal(buildProjectPrompt({id:115}),"分析项目115的样品数据");
+  assert.equal(buildProjectPrompt({id:-1539}),"分析项目-1539的样品数据");
   assert.equal(buildFieldPrompt("formula",{name:"PC"}),"找PC含量最高的样品");
   assert.equal(buildFieldPrompt("performance",{name:"冲击强度"}),"找冲击强度最高的样品");
+});
+
+test("negative project ids are treated as historical imports",()=>{
+  assert.equal(isHistoricalImportProject(-1539),true);
+  assert.equal(isHistoricalImportProject("-1540"),true);
+  assert.equal(isHistoricalImportProject(115),false);
+  assert.equal(projectDisplayName({id:-1539,name:null}),"历史导入项目 -1539");
+  assert.equal(projectDisplayName({id:115,name:"高分子材料"}),"高分子材料");
 });

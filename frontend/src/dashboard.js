@@ -13,6 +13,19 @@ export const FIELD_SECTION_LABELS={
   conditions:"测试条件",
 };
 
+export function isHistoricalImportProject(projectId){
+  const value=Number(projectId);
+  return Number.isInteger(value)&&value<0;
+}
+
+export function projectDisplayName(project){
+  const name=String(project?.name||"").trim();
+  if(name)return name;
+  const value=Number(project?.id);
+  if(Number.isInteger(value)&&value<0)return `历史导入项目 ${value}`;
+  return "未命名项目";
+}
+
 function sampleId(sample){
   const value=Number(sample?.id);
   return Number.isInteger(value)?String(value):"";

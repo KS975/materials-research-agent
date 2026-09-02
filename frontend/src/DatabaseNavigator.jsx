@@ -12,6 +12,8 @@ import {
   buildSamplePrompt,
   DASHBOARD_TABS,
   FIELD_SECTION_LABELS,
+  isHistoricalImportProject,
+  projectDisplayName,
 } from "./dashboard";
 
 const PAGE_SIZE=20;
@@ -40,7 +42,7 @@ function Overview({summary,onTab}){
   return <div className="dbOverview">
     <ScopeBanner scope={summary.scope}/>
     <div className="dbMetricGrid">
-      <div><span>授权项目</span><b>{countLabel(summary.project_count)}</b></div>
+      <div><span>授权项目 · 历史导入 {countLabel(summary.historical_import_project_count)}</span><b>{countLabel(summary.project_count)}</b></div>
       <div><span>授权样品</span><b>{countLabel(summary.sample_count)}</b></div>
       <div className="wide"><span>样品最近更新</span><b>{formatDate(summary.latest_sample_update)}</b></div>
     </div>
@@ -58,11 +60,14 @@ function ProjectBrowser({data,loading,query,setQuery,onSearch,onOpenSamples,onUs
     <div className="dbSearch"><input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onSearch()} placeholder="搜索项目名称或项目ID"/><button onClick={onSearch}>搜索</button></div>
     <div className="dbResultLine"><b>{countLabel(data?.total)} 个项目</b><span>仅当前公司授权范围</span></div>
     {loading?<Loading/>:!data?.projects?.length?<Empty>没有找到符合条件的项目</Empty>:<div className="dbProjectList">
-      {data.projects.map(project=><div className="dbProjectCard" key={project.id}>
-        <div><small>PROJECT {project.id}</small><b>{project.name||"未命名项目"}</b><span>{project.describe||"暂无项目描述"}</span></div>
-        <div className="dbProjectStats"><b>{countLabel(project.sample_count)}</b><span>样品</span></div>
-        <div className="dbRowActions"><button onClick={()=>onOpenSamples(project)}>查看样品</button><button onClick={()=>onUsePrompt(buildProjectPrompt(project))}>带入对话</button></div>
-      </div>)}
+      {data.projects.map(project=>{
+        const historical=project.project_origin==="history_import"||isHistoricalImportProject(project.id);
+        return <div className="dbProjectCard" key={project.id}>
+          <div><small>PROJECT {project.id}{historical?" · 历史导入":""}</small><b>{projectDisplayName(project)}</b><span>{project.describe||(historical?"由历史记录导入，未建立独立项目档案":"暂无项目描述")}</span></div>
+          <div className="dbProjectStats"><b>{countLabel(project.sample_count)}</b><span>样品</span></div>
+          <div className="dbRowActions"><button onClick={()=>onOpenSamples(project)}>查看样品</button><button onClick={()=>onUsePrompt(buildProjectPrompt(project))}>带入对话</button></div>
+        </div>;
+      })}
     </div>}
   </div>
 }
@@ -101,8 +106,9 @@ function SampleDetail({detail,onClose,onUsePrompt}){
   if(!detail)return null;
   const data=detail.data||{};
   const sample=data.sample||{};
+  const historical=isHistoricalImportProject(sample.project_id);
   return <div className="dbDetail">
-    <div className="dbDetailHead"><div><small>SAMPLE {sample.id}</small><h3>{sample.name||"未命名样品"}</h3><p>Project {sample.project_id} · {sample.sample_type||"类型未记录"}</p></div><button onClick={onClose}>返回列表</button></div>
+    <div className="dbDetailHead"><div><small>SAMPLE {sample.id}</small><h3>{sample.name||"未命名样品"}</h3><p>Project {sample.project_id}{historical?" · 历史导入":""} · {sample.sample_type||"类型未记录"}</p></div><button onClick={onClose}>返回列表</button></div>
     <div className="dbDetailActions"><button onClick={()=>onUsePrompt(buildSamplePrompt("profile",[sample]))}>查看完整信息</button><button onClick={()=>onUsePrompt(buildSamplePrompt("similar",[sample]))}>找相似样品</button><button onClick={()=>onUsePrompt(buildSamplePrompt("history",[sample]))}>查历史案例</button></div>
     <DetailFields title="配方" items={data.formula}/><DetailFields title="工艺" items={data.process}/><DetailFields title="性能" items={data.performance}/>
     <section className="dbDetailSection"><h4>测试条件<span>{Object.keys(data.conditions||{}).length}</span></h4>{!Object.keys(data.conditions||{}).length?<p>没有结构化记录</p>:<div>{Object.entries(data.conditions||{}).map(([key,value])=><div key={key}><span>{key}</span><b>{String(value)}</b></div>)}</div>}</section>
@@ -121,15 +127,16 @@ function SampleBrowser({data,loading,query,setQuery,onSearch,page,setPage,projec
   const total=Number(data?.total||0);
   const pages=Math.max(1,Math.ceil(total/PAGE_SIZE));
   return <div className="dbBrowser dbSamplesBrowser">
-    {projectFilter&&<div className="dbProjectFilter"><span>当前项目</span><b>{projectFilter.id} · {projectFilter.name}</b><button onClick={onClearProject}>查看全部</button></div>}
+    {projectFilter&&<div className="dbProjectFilter"><span>当前项目</span><b>{projectFilter.id} · {projectDisplayName(projectFilter)}</b><button onClick={onClearProject}>查看全部</button></div>}
     <div className="dbSearch"><input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onSearch()} placeholder="搜索样品名称或样品ID"/><button onClick={onSearch}>搜索</button></div>
     <div className="dbResultLine"><b>{countLabel(total)} 个样品</b><span>第 {page}/{pages} 页</span></div>
     {loading?<Loading/>:!data?.samples?.length?<Empty>没有找到符合条件的样品</Empty>:<div className="dbSampleList">{data.samples.map(sample=>{
       const checked=selected.some(x=>x.id===sample.id);
       const counts=sample.field_counts||{};
+      const historical=sample.project_origin==="history_import"||isHistoricalImportProject(sample.project_id);
       return <div className={`dbSampleCard ${checked?"selected":""}`} key={sample.id}>
         <button className="dbSelect" onClick={()=>onToggle(sample)} aria-label={checked?"取消选择":"选择样品"}>{checked?"✓":"＋"}</button>
-        <button className="dbSampleMain" onClick={()=>onDetail(sample)}><small>{sample.id} · PROJECT {sample.project_id??"-"}</small><b>{sample.name||"未命名样品"}</b><span>{sample.project_name||"项目名称未记录"} · {sample.sample_type||"类型未记录"}</span><em>配方 {counts.formula||0} · 工艺 {counts.process||0} · 性能 {counts.performance||0} · 条件 {counts.conditions||0}</em></button>
+        <button className="dbSampleMain" onClick={()=>onDetail(sample)}><small>{sample.id} · PROJECT {sample.project_id??"-"}{historical?" · 历史导入":""}</small><b>{sample.name||"未命名样品"}</b><span>{sample.project_name||"项目名称未记录"} · {sample.sample_type||"类型未记录"}</span><em>配方 {counts.formula||0} · 工艺 {counts.process||0} · 性能 {counts.performance||0} · 条件 {counts.conditions||0}</em></button>
       </div>;
     })}</div>}
     <div className="dbPager"><button disabled={page<=1} onClick={()=>setPage(page-1)}>上一页</button><span>{page} / {pages}</span><button disabled={page>=pages} onClick={()=>setPage(page+1)}>下一页</button></div>
