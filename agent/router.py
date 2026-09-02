@@ -41,10 +41,21 @@ class RuleIntentRouter:
     )
     _rank_markers = ("最好", "最高", "最低", "排序", "排名", "前几", "top")
     _mean_markers = ("平均值", "平均数", "均值", "平均多少", "平均大概多少")
+    _rank_request_actions = (
+        "给我", "请给我", "帮我找出", "帮我找", "帮我查", "帮我",
+        "查一下", "查询一下", "看看", "看一下", "列出", "列一下",
+        "统计一下", "找出", "找", "查", "搜索",
+    )
+    # Always match longer request actions first.  This prevents a shorter
+    # prefix such as “找” from consuming the beginning of “找出” and leaving
+    # the trailing character attached to the metric name.
     _rank_request_prefix = re.compile(
-        r"^(?:(?:请|麻烦)\s*)?"
-        r"(?:给我|请给我|帮我找|帮我查|帮我|查一下|查询一下|"
-        r"看看|看一下|列出|列一下|统计一下|找|查|搜索)\s*"
+        r"^(?:(?:请|麻烦)\s*)?(?:"
+        + "|".join(
+            re.escape(action)
+            for action in sorted(_rank_request_actions, key=len, reverse=True)
+        )
+        + r")\s*"
     )
 
     def route(self, message: str) -> IntentDecision | None:
