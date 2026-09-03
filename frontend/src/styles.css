@@ -213,6 +213,26 @@ header button{color:#374151;background:#fff;border-color:#d1d5db}header button:h
 @media(max-width:1200px){header>div:last-child .versionTopBtn,header>div:last-child .demoModeBtn{display:none}.dbNavigator{width:min(650px,calc(100vw - 76px));min-width:500px}}
 @media(max-width:700px){.dbNavigator{width:100vw;min-width:0}.dbNavHead{padding:18px 16px 13px}.dbNavigator>nav{padding:0 8px}.dbNavBody{padding:14px 12px 110px}.dbStartCards{grid-template-columns:1fr}.dbFieldSearch{grid-template-columns:1fr auto}.dbFieldSearch select{grid-column:1/-1}.dbFieldGroup>div,.dbDetailSection>div{grid-template-columns:1fr}.dbMetricGrid{grid-template-columns:1fr}.dbMetricGrid>div.wide{grid-column:auto}.dbSelectionBar{right:10px;bottom:10px;left:10px}.dbNavToggle{font-size:0}.dbNavToggle:after{content:"▣ 数据库";font-size:13px}}
 
+/* Answer Rendering V1: safe Markdown/GFM presentation */
+.content{padding:18px 20px;color:#1f2937;font-size:15px;line-height:1.75;white-space:normal}
+.markdownView{min-width:0;overflow-wrap:anywhere}
+.markdownView>:first-child{margin-top:0}.markdownView>:last-child{margin-bottom:0}
+.markdownView h1,.markdownView h2,.markdownView h3,.markdownView h4,.markdownView h5,.markdownView h6{color:#111827;font-weight:700;line-height:1.35}
+.markdownView h1{margin:2px 0 16px;font-size:22px}.markdownView h2{margin:22px 0 11px;padding-bottom:7px;border-bottom:1px solid #e5e7eb;font-size:19px}.markdownView h3{margin:18px 0 8px;font-size:16px}.markdownView h4,.markdownView h5,.markdownView h6{margin:15px 0 7px;font-size:15px}
+.markdownView p{margin:0 0 13px}.markdownView strong{color:#111827;font-weight:700}.markdownView em{color:#475467}.markdownView del{color:#98a2b3}
+.markdownView ul,.markdownView ol{margin:8px 0 14px;padding-left:24px}.markdownView li{margin:5px 0;padding-left:2px}.markdownView .mdListItemContent{display:contents}.markdownView .mdListItemContent>p{display:inline;margin:0}.markdownView li ul,.markdownView li ol{margin:4px 0 4px}
+.markdownView .mdTaskItem{display:flex;align-items:flex-start;gap:7px;list-style:none}.markdownView .mdTaskItem input{margin-top:6px;accent-color:#4f6fe5}
+.markdownView a{color:#3657c9;text-decoration:none;border-bottom:1px solid #cdd7ff}.markdownView a:hover{color:#2746ad;border-bottom-color:#4f6fe5}
+.markdownView blockquote{margin:14px 0;padding:10px 13px;border-left:3px solid #8ea2ff;border-radius:0 7px 7px 0;color:#526078;background:#f8faff}.markdownView blockquote>:last-child{margin-bottom:0}
+.markdownView hr{height:1px;margin:20px 0;border:0;background:#e5e7eb}
+.markdownView code{padding:2px 5px;border:1px solid #e4e7ec;border-radius:5px;color:#2949b6;background:#f5f7ff;font:13px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
+.mdCodeBlock{margin:14px 0;overflow:hidden;border:1px solid #dfe3ea;border-radius:9px;background:#f8fafc}.mdCodeBlock>div{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-bottom:1px solid #e5e7eb;color:#667085;background:#f2f4f7;font-size:11px}.mdCodeBlock pre{max-height:360px;margin:0;padding:13px 14px;overflow:auto;white-space:pre}.mdCodeBlock pre code{padding:0;border:0;border-radius:0;color:#1f2937;background:transparent;font-size:12.5px}
+.mdTableBlock{margin:15px 0;overflow:hidden;border:1px solid #dfe3ea;border-radius:9px;background:#fff}.mdTableScroll{max-width:100%;overflow-x:auto}.mdTableBlock table{width:100%;min-width:520px;border-collapse:collapse;font-size:13px;line-height:1.5}.mdTableBlock th{position:sticky;top:0;padding:10px 12px;border-bottom:1px solid #dfe3ea;color:#344054;background:#f7f8fa;font-weight:650;white-space:nowrap}.mdTableBlock td{padding:9px 12px;border-bottom:1px solid #edf0f3;color:#475467;vertical-align:top}.mdTableBlock tbody tr:nth-child(even){background:#fafbfc}.mdTableBlock tbody tr:hover{background:#f5f7ff}.mdTableBlock tbody tr:last-child td{border-bottom:0}
+.mdTableMore{width:100%;padding:8px;border:0;border-top:1px solid #e5e7eb;color:#3657c9;background:#fafbff;font-size:12px;cursor:pointer}.mdTableMore:hover{background:#f3f6ff}
+.mdRawHtml{padding:8px 10px;border:1px dashed #d0d5dd;border-radius:7px;color:#667085;background:#fafafa;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}
+.answerActions{display:flex;justify-content:flex-end;padding:0 13px 10px}.mdCopyControl{padding:5px 9px;border:1px solid #e1e5eb;border-radius:7px;color:#667085;background:#fff;font-size:11px;cursor:pointer}.mdCopyControl:hover{color:#3657c9;border-color:#cdd7ff;background:#f8faff}
+@media(max-width:640px){.content{padding:15px 14px;font-size:14px}.markdownView h1{font-size:20px}.markdownView h2{font-size:18px}.mdTableBlock table{min-width:480px}.mdCodeBlock pre{max-height:280px}}
+
 /* Unit-platform request context: read-only and never exposes Authorization. */
 .platformScopeFields label>span{display:block;overflow:hidden;padding:7px 8px;border:1px solid #e5e7eb;border-radius:7px;color:#26324a;background:#f8fafc;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}
 .platformScopeFields p{color:#667085}.scopeFailed{border-color:#fecaca;background:#fff8f8}.scopeIdentityError{color:#b42318!important;overflow-wrap:anywhere}

@@ -107,7 +107,7 @@ def _platform_headers(payload=None):
     }
 
 
-def test_platform_permission_resolves_four_forwarded_headers_and_user_claim():
+def test_platform_permission_resolves_optional_organization_headers_and_user_claim():
     response = TestClient(_platform_app()).get("/", headers=_platform_headers())
 
     assert response.status_code == 200
@@ -129,12 +129,25 @@ def test_platform_permission_accepts_nested_user_claim():
     assert response.json()["user_id"] == "nested-user"
 
 
-def test_platform_permission_fails_closed_when_header_missing():
+def test_platform_permission_accepts_platforms_that_only_send_identity_headers():
     headers = _platform_headers()
     headers.pop("organization-id")
+    headers.pop("organization-level")
     response = TestClient(_platform_app()).get("/", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["organization_id"] is None
+    assert response.json()["organization_level"] is None
+    assert response.json()["all_projects"] is True
+
+
+def test_platform_permission_still_fails_closed_without_required_identity_header():
+    headers = _platform_headers()
+    headers.pop("company-id")
+    response = TestClient(_platform_app()).get("/", headers=headers)
+
     assert response.status_code == 401
-    assert "organization-id" in response.json()["detail"]
+    assert "authorization、company-id" in response.json()["detail"]
 
 
 def test_platform_permission_requires_explicit_gateway_trust():
@@ -172,3 +185,26 @@ def test_session_context_returns_safe_identity_without_token():
     assert response.json()["project_mode"] == "company_all_projects"
     assert "authorization" not in response.text.lower()
     assert "test-signature" not in response.text
+
+
+def test_session_context_accepts_two_header_platform_contract():
+    settings = Settings(
+        _env_file=None,
+        permission_mode="platform",
+        platform_trust_forwarded_headers=True,
+        llm_enabled=False,
+    )
+    app = FastAPI()
+    app.include_router(chat_router)
+    app.dependency_overrides[get_settings] = lambda: settings
+    headers = _platform_headers()
+    headers.pop("organization-id")
+    headers.pop("organization-level")
+
+    response = TestClient(app).get("/api/v1/session-context", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["user_id"] == "2090369875129171970"
+    assert response.json()["company_id"] == "6a4b19f62d0e000027001eb8"
+    assert response.json()["organization_id"] is None
+    assert response.json()["organization_level"] is None

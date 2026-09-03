@@ -33,10 +33,14 @@ class PlatformPermissionAdapter:
                 ),
             )
 
+        # The deployed MatCloud UI consistently sends authorization and
+        # company-id. Organization headers are page/context dependent, so they
+        # must narrow an existing company scope when present instead of being
+        # prerequisites for establishing the user's identity.
         authorization = self._required_header(request, "authorization")
         company_id = self._required_header(request, "company-id")
-        organization_id = self._required_header(request, "organization-id")
-        organization_level = self._required_header(request, "organization-level")
+        organization_id = self._optional_header(request, "organization-id")
+        organization_level = self._optional_header(request, "organization-level")
 
         scheme, separator, token = authorization.partition(" ")
         if not separator or scheme.casefold() != "bearer" or not token.strip():
@@ -73,10 +77,21 @@ class PlatformPermissionAdapter:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=(
-                    "平台请求缺少必需 Header：authorization、company-id、"
-                    "organization-id、organization-level"
+                    "平台请求缺少必需 Header：authorization、company-id"
                 ),
             )
+        if len(value) > cls._MAX_HEADER_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"平台 Header {name} 长度异常",
+            )
+        return value
+
+    @classmethod
+    def _optional_header(cls, request: Request, name: str) -> str | None:
+        value = (request.headers.get(name) or "").strip()
+        if not value:
+            return None
         if len(value) > cls._MAX_HEADER_LENGTH:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

@@ -24,6 +24,7 @@ import { getMondayDemoStatus } from "./demo_api";
 import { createInitialAnalysisStep, mergeProgressStep } from "./progress";
 import DatabaseNavigator from "./DatabaseNavigator";
 import ChatHistoryPanel from "./ChatHistoryPanel";
+import MarkdownView, { CopyControl } from "./MarkdownView";
 
 const quick=[
   {label:"单位真实数据",text:"查看单位真实数据概况",type:"chat"},
@@ -754,11 +755,12 @@ function AnalysisProgress({steps=[],live=false}){
 function Message({m,scope}){
   const isV020Feedback=m.data?.kind==="v020_feedback_loop";
   const isV030Autonomy=m.data?.kind==="v030_autonomy";
+  const showAnswerActions=m.role==="assistant"&&!m.pending&&Boolean(m.content);
   return <div className={`msg ${m.role}`}>
     <div className="avatar">{m.role==="assistant"?<Logo/>:"你"}</div>
     <div className="msgcol">
       <small>{m.role==="assistant"?"材数智能体":"你"}</small>
-      <div className="bubble">{(m.pending||m.progress?.length>0)&&<AnalysisProgress steps={m.progress||[]} live={!!m.pending}/>} {!isV020Feedback&&!isV030Autonomy&&m.content&&<div className="content">{m.content}</div>}<ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/><Detail m={m}/></div>
+      <div className="bubble">{(m.pending||m.progress?.length>0)&&<AnalysisProgress steps={m.progress||[]} live={!!m.pending}/>} {!isV020Feedback&&!isV030Autonomy&&m.content&&<div className="content">{m.role==="assistant"?<MarkdownView content={m.content}/>:m.content}</div>}<ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/>{showAnswerActions&&<div className="answerActions"><CopyControl value={m.content} label="复制答案"/></div>}<Detail m={m}/></div>
     </div>
   </div>
 }
