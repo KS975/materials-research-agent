@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 
 from agent.core import AgentCore
+from agent.engine_tool_registration import register_engine_tools
 from agent.service import MaterialsAgentService
 from agent.scenario_composer import ScenarioWorkflowComposer
 from agent.tool_registry import ToolRegistry
@@ -81,6 +82,7 @@ class ApplicationContainer:
             "读取当前公司/项目授权范围内实际出现的材料字段名称、类别和单位；不返回字段值",
             self.tools.get_material_field_catalog,
         )
+        register_engine_tools(self.registry)
 
         # Unified delivery architecture: fine-grained intents are compatibility
         # operation names.  Scenario Composer selects an atomic Skill contract,
