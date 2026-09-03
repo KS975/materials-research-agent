@@ -34,6 +34,13 @@ scipy==1.13.1
 scikit-learn==1.5.2
 joblib==1.4.2
 threadpoolctl==3.5.0
+pandas==2.2.3
+pyarrow==17.0.0
+jsonschema==4.23.0
+matplotlib==3.9.2
+xgboost==2.1.4
+lightgbm==4.5.0
+optuna==3.6.1
 
 # Company Excel import
 openpyxl==3.1.5
