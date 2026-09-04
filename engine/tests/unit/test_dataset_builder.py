@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 import numpy as np
@@ -47,6 +48,7 @@ class DatasetBuilderTests(unittest.TestCase):
                 cleaning_config=CleaningConfig(drop_fields=["feature_002"]),
                 source_uri="test-source",
                 output_dir=temporary,
+                units={"target_001": "MPa"},
             )
             artifact_dir = Path(artifact.artifact_dir)
             self.assertTrue((artifact_dir / "dataset.parquet").exists())
@@ -56,6 +58,10 @@ class DatasetBuilderTests(unittest.TestCase):
             lineage = __import__("json").loads(
                 (artifact_dir / "lineage.json").read_text(encoding="utf-8")
             )
+            metadata = json.loads(
+                (artifact_dir / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(metadata["units"], {"target_001": "MPa"})
             self.assertEqual(
                 lineage["cleaning_summary"]["removed_fields"],
                 ["feature_002"],

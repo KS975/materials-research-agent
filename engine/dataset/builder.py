@@ -33,6 +33,7 @@ def build_dataset(
     output_dir: str | Path = "engine/artifacts/datasets",
     cleaning_already_applied: bool = False,
     precleaning_report: CleaningExecutionReport | None = None,
+    units: dict[str, str] | None = None,
 ) -> DatasetArtifact:
     if gate_result.decision is GateDecision.failed:
         raise ValidationError("ModelingGateResult is FAIL; cannot build a formal dataset")
@@ -121,6 +122,11 @@ def build_dataset(
         "target_fields": targets,
         "identifier_fields": identifiers,
         "cleaning_config": vars(config),
+        "units": {
+            str(key): str(value)
+            for key, value in (units or {}).items()
+            if str(key).strip() and str(value).strip()
+        },
         "created_at": pd.Timestamp.now(tz="UTC").isoformat(),
     }
     lineage = {

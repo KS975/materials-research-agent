@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 import numpy as np
@@ -34,7 +35,10 @@ class PreprocessingTests(unittest.TestCase):
             source = _frame()
             result = run_dataset_preprocessing(
                 source,
-                metadata={"target_fields": ["target_001"]},
+                metadata={
+                    "target_fields": ["target_001"],
+                    "units": {"target_001": "MPa"},
+                },
                 source_uri="test-source",
                 output_dir=temporary,
             )
@@ -65,6 +69,10 @@ class PreprocessingTests(unittest.TestCase):
                 "cleaning_operation_records",
                 result.to_dict(),
             )
+            metadata = json.loads(
+                (artifact_dir / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(metadata["units"], {"target_001": "MPa"})
 
     def test_user_can_disable_missing_indicator(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

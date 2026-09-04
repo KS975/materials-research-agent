@@ -93,6 +93,10 @@ class ApplicationContainer:
                 item.strip()
                 for item in settings.engine_default_algorithms.split(",")
             ),
+            allowed_model_statuses=(
+                item.strip()
+                for item in settings.engine_allowed_model_statuses.split(",")
+            ),
         )
 
         # Unified delivery architecture: fine-grained intents are compatibility

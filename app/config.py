@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     engine_artifact_root: str = ".runtime/engine_artifacts"
     engine_max_source_rows: int = 5000
     engine_default_algorithms: str = "linear_regression,ridge"
+    # Development keeps newly trained CANDIDATE models usable for fast
+    # validation. Production should restrict this to APPROVED,ACTIVE or an
+    # explicit rollout subset; DEPRECATED is always rejected by the adapter.
+    engine_allowed_model_statuses: str = "CANDIDATE"
     # ``legacy`` and ``shadow`` keep V0.1.4 T17/T18 as the optimization route;
     # ``engine`` sends those requests through EngineWorkflowAdapter. ``shadow``
     # is reserved as the safe rollout value until dual-run comparison is enabled.
@@ -140,6 +144,21 @@ class Settings(BaseSettings):
             raise ValueError("ENGINE_ARTIFACT_ROOT 不能为空")
         if not 10 <= self.engine_max_source_rows <= 100000:
             raise ValueError("ENGINE_MAX_SOURCE_ROWS 必须在10到100000之间")
+        allowed_model_statuses = {
+            item.strip().upper()
+            for item in self.engine_allowed_model_statuses.split(",")
+            if item.strip()
+        }
+        if not allowed_model_statuses:
+            raise ValueError("ENGINE_ALLOWED_MODEL_STATUSES 不能为空")
+        unsupported = allowed_model_statuses - {
+            "EXPERIMENTAL", "CANDIDATE", "VALIDATED", "APPROVED", "ACTIVE"
+        }
+        if unsupported:
+            raise ValueError(
+                "ENGINE_ALLOWED_MODEL_STATUSES 仅支持 "
+                "EXPERIMENTAL/CANDIDATE/VALIDATED/APPROVED/ACTIVE"
+            )
         if not 100_000 <= self.chat_ui_workflow_max_response_chars <= 10_000_000:
             raise ValueError(
                 "CHAT_UI_WORKFLOW_MAX_RESPONSE_CHARS 必须在100000到10000000之间"

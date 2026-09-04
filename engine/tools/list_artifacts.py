@@ -119,6 +119,7 @@ def _datasets_from_root(root_value: str) -> list[dict[str, Any]]:
             "data_hash": str(metadata["data_hash"]),
             "target_fields": list(metadata.get("target_fields", [])),
             "feature_fields": list(metadata.get("feature_fields", [])),
+            "units": dict(metadata.get("units", {})),
             "created_at": metadata.get("created_at"),
         })
     return records

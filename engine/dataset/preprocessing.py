@@ -114,6 +114,7 @@ def run_dataset_preprocessing(
         metadata=metadata,
         source_path=None if source_uri == "dataframe" else source_uri,
     )
+    units = _unit_metadata(metadata or {}, dataframe)
     initial_report = _quality_report(dataframe, resolved)
     initial_gate = apply_modeling_gate(initial_report)
     plan = _build_cleaning_plan(dataframe, initial_report, resolved)
@@ -148,6 +149,7 @@ def run_dataset_preprocessing(
             output_dir=output_dir,
             cleaning_already_applied=True,
             precleaning_report=execution,
+            units=units,
         )
     return DatasetPreprocessingResult(
         resolved_config=resolved,
@@ -177,6 +179,28 @@ def _quality_report(
         consistency_specs=resolved.consistency_specs,
         leakage_config=resolved.leakage_config,
     )
+
+
+def _unit_metadata(
+    metadata: dict[str, Any],
+    dataframe: pd.DataFrame,
+) -> dict[str, str]:
+    value = metadata.get("units")
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValidationError("units metadata must be a JSON object")
+    units = {
+        str(key): str(unit)
+        for key, unit in value.items()
+        if str(key).strip() and str(unit).strip()
+    }
+    unknown = set(units) - set(dataframe.columns)
+    if unknown:
+        raise ValidationError(
+            f"units metadata references unknown fields: {sorted(unknown)}"
+        )
+    return units
 
 
 def _build_cleaning_plan(

@@ -151,6 +151,10 @@ class EngineWorkflowAdapterTests(unittest.TestCase):
             Path(preprocess["output_dir"]).is_relative_to(project_root / "sessions")
         )
         self.assertEqual(preprocess["config"]["target_fields"], ["performance.impact"])
+        self.assertEqual(
+            preprocess["metadata"]["units"],
+            {"performance.impact": "kJ/m2"},
+        )
         self.assertNotIn(
             "performance.impact", preprocess["config"]["feature_fields"]
         )
@@ -183,6 +187,53 @@ class EngineWorkflowAdapterTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "MODEL_REQUIRED")
         self.assertNotIn("train_model", [name for name, _ in registry.calls])
+        self.assertNotIn("predict_model", [name for name, _ in registry.calls])
+
+    def test_target_unit_must_match_authorized_field_catalog(self) -> None:
+        registry = FakeRegistry()
+        result = self._adapter(registry).execute(
+            "engine_prepare_dataset",
+            "preprocess_dataset",
+            {
+                "project_id": 1,
+                "target_metric": "impact",
+                "target_unit": "J/m",
+            },
+            self.ctx,
+        )
+        self.assertEqual(result["status"], "ERROR")
+        self.assertIn("目标单位", result["answer"])
+        self.assertNotIn(
+            "preprocess_dataset", [name for name, _ in registry.calls]
+        )
+
+    def test_model_status_policy_can_exclude_candidate_models(self) -> None:
+        model = {
+            "model_id": "model_test",
+            "version": "v001",
+            "target_name": "performance.impact",
+            "dataset_artifact_id": "dataset_test",
+            "status": "CANDIDATE",
+            "feature_names": ["formula.A", "process.temperature"],
+        }
+        registry = FakeRegistry(models=[model])
+        adapter = EngineWorkflowAdapter(
+            registry,
+            artifact_root=self.root,
+            allowed_model_statuses=("ACTIVE",),
+        )
+        result = adapter.execute(
+            "predict_performance",
+            "predict_model",
+            {
+                "project_id": 1,
+                "target_metric": "impact",
+                "inputs": [{"A": 10.0, "temperature": 180.0}],
+            },
+            self.ctx,
+        )
+        self.assertEqual(result["status"], "MODEL_REQUIRED")
+        self.assertEqual(result["result"]["available_model_count"], 1)
         self.assertNotIn("predict_model", [name for name, _ in registry.calls])
 
     def test_optimization_uses_project_registry_and_maps_business_fields(self) -> None:

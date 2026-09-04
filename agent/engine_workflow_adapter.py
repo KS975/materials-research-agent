@@ -78,6 +78,7 @@ class _SourceSnapshot:
     path: Path
     source_hash: str
     records: list[dict[str, Any]]
+    catalog: dict[str, Any]
     numeric_feature_fields: list[str]
     sample_count: int
     warnings: list[str]
@@ -99,6 +100,7 @@ class EngineWorkflowAdapter:
         enabled: bool = True,
         max_source_rows: int = 5000,
         default_algorithms: Iterable[str] = (),
+        allowed_model_statuses: Iterable[str] = ("CANDIDATE",),
     ) -> None:
         self.registry = registry
         self.enabled = bool(enabled)
@@ -106,6 +108,13 @@ class EngineWorkflowAdapter:
         self.default_algorithms = tuple(
             str(item).strip() for item in default_algorithms if str(item).strip()
         )
+        self.allowed_model_statuses = {
+            str(item).strip().upper()
+            for item in allowed_model_statuses
+            if str(item).strip()
+        }
+        if not self.allowed_model_statuses:
+            raise ValueError("allowed_model_statuses must not be empty")
         self.artifact_root = Path(artifact_root).resolve()
 
     def execute(
@@ -545,13 +554,7 @@ class EngineWorkflowAdapter:
     ) -> tuple[_SourceSnapshot, str, dict[str, Any]]:
         target_metric = self._required_string(args.get("target_metric"))
         snapshot = self._authorized_snapshot(scope)
-        catalog = build_material_field_catalog({
-            "samples": self._catalog_source(snapshot.records),
-            "total_matches": snapshot.sample_count,
-            "scan_complete": True,
-            "scan_truncated": False,
-            "warnings": [],
-        })
+        catalog = snapshot.catalog
         binding = bind_metric_to_catalog(
             target_metric,
             catalog,
@@ -607,6 +610,7 @@ class EngineWorkflowAdapter:
             raise ValueError(
                 f"授权样品数 {sample_count} 超过配置上限 {self.max_source_rows}。"
             )
+        catalog = build_material_field_catalog(source)
         records, warnings = self._flatten_samples(source.get("samples") or [])
         if not records:
             raise ValueError("授权样品字段解析后没有可用数据行。")
@@ -627,6 +631,7 @@ class EngineWorkflowAdapter:
             path=source_path,
             source_hash=file_hash,
             records=records,
+            catalog=catalog,
             numeric_feature_fields=numeric_feature_fields,
             sample_count=sample_count,
             warnings=warnings,
@@ -737,37 +742,6 @@ class EngineWorkflowAdapter:
         )
         return records, warnings
 
-    def _catalog_source(
-        self,
-        records: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        # Rebuild the resolver-shaped payload only for catalog construction.
-        return [
-            {
-                "sample": {
-                    "id": record.get("sample_id"),
-                    "name": record.get("sample_name"),
-                    "project_id": record.get("project_id"),
-                    "sample_type": record.get("sample_type"),
-                    "create_time": record.get("create_time"),
-                },
-                "formula": [{"name": key.split(".", 1)[1], "value": value}
-                            for key, value in record.items()
-                            if key.startswith("formula.")],
-                "process": [{"name": key.split(".", 1)[1], "value": value}
-                            for key, value in record.items()
-                            if key.startswith("process.")],
-                "performance": [{"name": key.split(".", 1)[1], "value": value}
-                                for key, value in record.items()
-                                if key.startswith("performance.")],
-                "conditions": {
-                    key.split(".", 1)[1]: value for key, value in record.items()
-                    if key.startswith("condition.")
-                },
-            }
-            for record in records
-        ]
-
     def _model_records(self, scope: _ArtifactScope) -> list[dict[str, Any]]:
         result = self._run_tool(
             "list_artifacts",
@@ -828,7 +802,8 @@ class EngineWorkflowAdapter:
     ) -> dict[str, Any] | None:
         candidates = [
             item for item in records
-            if str(item.get("status") or "CANDIDATE").upper() != "DEPRECATED"
+            if str(item.get("status") or "CANDIDATE").upper()
+            in self.allowed_model_statuses
         ]
         if model_id is not None:
             candidates = [
