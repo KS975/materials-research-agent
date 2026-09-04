@@ -5,6 +5,7 @@ from functools import lru_cache
 
 from agent.core import AgentCore
 from agent.engine_tool_registration import register_engine_tools
+from agent.engine_workflow_adapter import EngineWorkflowAdapter
 from agent.service import MaterialsAgentService
 from agent.scenario_composer import ScenarioWorkflowComposer
 from agent.tool_registry import ToolRegistry
@@ -83,6 +84,16 @@ class ApplicationContainer:
             self.tools.get_material_field_catalog,
         )
         register_engine_tools(self.registry)
+        self.engine_workflow_adapter = EngineWorkflowAdapter(
+            self.registry,
+            artifact_root=settings.engine_artifact_root,
+            enabled=settings.engine_workflow_enabled,
+            max_source_rows=settings.engine_max_source_rows,
+            default_algorithms=(
+                item.strip()
+                for item in settings.engine_default_algorithms.split(",")
+            ),
+        )
 
         # Unified delivery architecture: fine-grained intents are compatibility
         # operation names.  Scenario Composer selects an atomic Skill contract,
@@ -171,6 +182,7 @@ class ApplicationContainer:
             llm_enabled=settings.llm_enabled,
             skill_registry=self.skill_registry,
             scenario_composer=self.scenario_composer,
+            engine_workflow_adapter=self.engine_workflow_adapter,
         )
         self.runtime = create_runtime_store(settings)
         self.agent = MaterialsAgentService(self.core, self.runtime)

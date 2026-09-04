@@ -36,6 +36,7 @@ _SEMANTIC_FAMILIES = {
     "current_attachment",
     "general_conversation",
     "material_tool",
+    "engine_workflow",
 }
 
 

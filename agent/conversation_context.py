@@ -9,7 +9,10 @@ CONVERSATION_CONTEXT_SCHEMA_VERSION = "2.1.2"
 
 
 _PROJECT_RE = re.compile(
-    r"(?:project|项目)\s*[:#：-]?\s*(-?\d+)",
+    # A hyphen immediately before digits is part of a negative project ID,
+    # not punctuation.  This matters for history-imported projects such as
+    # Project -1659.
+    r"(?:project|项目)\s*[:#：]?\s*(-?\d+)",
     re.IGNORECASE,
 )
 _NUMERIC_ID_RE = re.compile(r"(?<![\d.])-?\d{3,}(?![\d.])")

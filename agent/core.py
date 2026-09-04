@@ -13,6 +13,7 @@ from skills.analysis import AnalysisSkill
 from skills.comparison import ComparisonSkill
 from skills.data_query import DataQuerySkill
 from skills.material_intelligence import MaterialIntelligenceSkill
+from skills.engine_workflow import EngineWorkflowSkill
 
 
 class AgentCore:
@@ -23,6 +24,7 @@ class AgentCore:
         llm_enabled: bool,
         skill_registry: SkillRegistry | None = None,
         scenario_composer: ScenarioWorkflowComposer | None = None,
+        engine_workflow_adapter=None,
     ):
         self.registry = registry
         self.llm = llm
@@ -38,6 +40,11 @@ class AgentCore:
         self.rule_router = RuleIntentRouter()
         self.llm_router = LLMIntentRouter(llm)
         self.material_intelligence_skill = MaterialIntelligenceSkill(registry)
+        self.engine_workflow_skill = (
+            EngineWorkflowSkill(engine_workflow_adapter)
+            if engine_workflow_adapter is not None
+            else None
+        )
         data_query = DataQuerySkill(registry)
         comparison = ComparisonSkill(registry)
         analysis = AnalysisSkill(registry)
@@ -52,6 +59,15 @@ class AgentCore:
                 self.material_intelligence_skill,
             ],
             "data_governance": [data_query, self.material_intelligence_skill],
+            "auto_ml": (
+                [self.engine_workflow_skill] if self.engine_workflow_skill else []
+            ),
+            "prediction": (
+                [self.engine_workflow_skill] if self.engine_workflow_skill else []
+            ),
+            "optimization": (
+                [self.engine_workflow_skill] if self.engine_workflow_skill else []
+            ),
         }
 
     def route(self, message: str):
@@ -86,6 +102,13 @@ class AgentCore:
                         dict(tool_args),
                         ctx,
                     )
+                elif isinstance(handler, EngineWorkflowSkill):
+                    result = handler.execute_intent(
+                        intent,
+                        tool_name,
+                        dict(tool_args),
+                        ctx,
+                    )
                 else:
                     result = handler.execute(tool_name, tool_args, ctx)
                 self.skill_registry.get(plan.primary_skill).validate_output(result)
@@ -106,6 +129,16 @@ class AgentCore:
         # its coverage statement are rendered directly from deterministic data.
         if intent == "performance_statistics":
             return self._deterministic_answer(intent, tool_result)
+        if intent in {
+            "engine_prepare_dataset",
+            "automl_training",
+            "predict_performance",
+            "optimize_formula",
+            "recommend_next_experiments",
+        } and isinstance(tool_result, dict):
+            answer = str(tool_result.get("answer") or "").strip()
+            if answer:
+                return answer
         if not self.llm_enabled:
             return self._deterministic_answer(intent, tool_result)
 

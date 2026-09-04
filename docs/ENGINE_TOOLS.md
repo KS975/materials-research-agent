@@ -26,7 +26,34 @@ result = registry.execute(
 )
 ```
 
-The registration is intentionally independent from intent routing and Skill
-allow-lists. Chat orchestration can adopt the tools in a later, separately
-reviewed change. Engine-owned outputs default under `engine/artifacts/`; set
-`ENGINE_ARTIFACT_ROOT` to relocate them.
+The raw registration remains framework-neutral. The Agent adopts the tools
+through `EngineWorkflowAdapter`, rather than exposing path-bearing payloads to
+the language model. The adapter owns permission checks, project selection,
+artifact paths, model lookup and the fixed Tool order.
+
+Public natural-language entry points are limited to:
+
+| Intent | Public entry Tool | Host-controlled workflow |
+|---|---|---|
+| `engine_prepare_dataset` | `preprocess_dataset` | authorized snapshot -> preprocess -> Modeling Gate |
+| `automl_training` | `train_model` | authorized snapshot -> preprocess -> Gate -> train/register |
+| `predict_performance` | `predict_model` | list models -> select project model -> validate input -> predict |
+| `optimize_formula` | `optimize_formula` | list models -> bind objectives -> optimize -> chart data |
+| `recommend_next_experiments` | `recommend_next_experiments` | list models -> authorized history -> recommend -> chart data |
+
+`list_artifacts` and `get_chart_data` are internal workflow steps and are not
+valid DeepSeek routing choices. LLM-provided source paths, artifact roots and
+model registry paths are discarded.
+
+Engine-owned outputs default under `.runtime/engine_artifacts/`; set
+`ENGINE_ARTIFACT_ROOT` to relocate them. The host scopes the files as:
+
+```text
+companies/<company>/projects/project_<id>/
+  models/model-registry.json
+  sessions/<conversation>/datasets/
+  sessions/<conversation>/optimizations/
+```
+
+Model registries are reusable across conversations inside the same Company and
+Project. A different Company cannot select the same registry path.

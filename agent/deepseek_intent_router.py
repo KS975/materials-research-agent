@@ -36,6 +36,11 @@ _ALLOWED_TOOLS = {
     "compare_samples",
     "find_samples",
     "list_samples_for_analysis",
+    "preprocess_dataset",
+    "train_model",
+    "predict_model",
+    "optimize_formula",
+    "recommend_next_experiments",
 }
 
 _ALLOWED_INTENTS = _ALLOWED_TOOLS | {
@@ -62,6 +67,11 @@ _ALLOWED_INTENTS = _ALLOWED_TOOLS | {
     "general_conversation",
     "unsupported_future_feature",
     "clarification_required",
+    "engine_prepare_dataset",
+    "automl_training",
+    "predict_performance",
+    "optimize_formula",
+    "recommend_next_experiments",
 }
 
 _SPECIAL_NO_TOOL_INTENTS = {
@@ -137,6 +147,17 @@ _INTENT_ALIASES = {
     "general_chat": "general_conversation",
     "general_knowledge": "general_conversation",
     "conversation": "general_conversation",
+    "prepare_modeling_dataset": "engine_prepare_dataset",
+    "preprocess_for_modeling": "engine_prepare_dataset",
+    "train_model": "automl_training",
+    "build_model": "automl_training",
+    "automl": "automl_training",
+    "model_prediction": "predict_performance",
+    "predict_model": "predict_performance",
+    "formula_optimization": "optimize_formula",
+    "inverse_design": "optimize_formula",
+    "next_experiments": "recommend_next_experiments",
+    "recommend_experiments": "recommend_next_experiments",
 }
 
 _TOOL_ALIASES = {
@@ -170,6 +191,12 @@ _TOOL_ALIASES = {
     "data_quality_check": "list_samples_for_analysis",
     "find_samples_multi_condition": "list_samples_for_analysis",
     "similar_samples": "list_samples_for_analysis",
+    "engine_prepare_dataset": "preprocess_dataset",
+    "automl_training": "train_model",
+    "predict_performance": "predict_model",
+    "formula_optimization": "optimize_formula",
+    "inverse_design": "optimize_formula",
+    "next_experiments": "recommend_next_experiments",
 }
 
 _DOMAIN_BY_INTENT = {
@@ -201,6 +228,11 @@ _DOMAIN_BY_INTENT = {
     "general_conversation": "conversation",
     "unsupported_future_feature": "system",
     "clarification_required": "conversation",
+    "engine_prepare_dataset": "plan_execute",
+    "automl_training": "plan_execute",
+    "predict_performance": "predict_optimize",
+    "optimize_formula": "predict_optimize",
+    "recommend_next_experiments": "predict_optimize",
 }
 
 _REQUIRED_ARGS = {
@@ -231,6 +263,11 @@ _REQUIRED_ARGS = {
         "right_identifier",
         "target_metric",
     ),
+    "engine_prepare_dataset": ("target_metric",),
+    "automl_training": ("target_metric",),
+    "predict_performance": ("target_metric",),
+    "optimize_formula": ("objectives",),
+    "recommend_next_experiments": ("objectives",),
 }
 
 _EXPECTED_TOOL_BY_INTENT = {
@@ -252,6 +289,11 @@ _EXPECTED_TOOL_BY_INTENT = {
     "find_samples": "find_samples",
     "analyze_cause": "get_sample_context",
     "analyze_performance_difference": "compare_samples",
+    "engine_prepare_dataset": "preprocess_dataset",
+    "automl_training": "train_model",
+    "predict_performance": "predict_model",
+    "optimize_formula": "optimize_formula",
+    "recommend_next_experiments": "recommend_next_experiments",
 }
 
 _ALLOWED_DOMAINS = {
@@ -295,6 +337,8 @@ class DeepSeekIntentRouter:
         field_catalog: dict[str, Any] | None = None,
         database_explorer_enabled: bool = False,
         database_explorer_mode: str = "off",
+        engine_workflow_enabled: bool = False,
+        engine_optimization_route: str = "legacy",
     ) -> DeepSeekIntentDecision:
         hints = build_conversation_hints(message, history)
         system_prompt = self._system_prompt()
@@ -312,6 +356,11 @@ class DeepSeekIntentRouter:
                     "enabled": bool(database_explorer_enabled),
                     "mode": str(database_explorer_mode or "off"),
                 },
+                "engine_workflows": {
+                    "enabled": bool(engine_workflow_enabled),
+                    "optimization_route": str(engine_optimization_route or "legacy"),
+                    "automatic_training": False,
+                },
             },
         }
         raw = self.llm.complete(
@@ -327,6 +376,7 @@ class DeepSeekIntentRouter:
             hints=hints,
             field_catalog=field_catalog,
             database_explorer_enabled=database_explorer_enabled,
+            engine_workflow_enabled=engine_workflow_enabled,
         )
 
     @staticmethod
@@ -413,7 +463,20 @@ class DeepSeekIntentRouter:
 - 此 Intent Router 仍然严禁生成 SQL；后续独立的受控 Database Explorer 会读取授权虚拟 Schema、生成并校验只读 SQL。
 - 与当前业务数据库无关的材料知识、日常问题和普通讨论仍使用 general_conversation。
 
-高级 Dataset/ML/BO/V0.2/V0.3 请求在进入本路由器之前通常由上层确定性路由处理。
+7) 受控建模、预测与配方优化（Engine Workflow）：
+- 只有 backend_capabilities.engine_workflows.enabled=true 时才允许选择以下意图。
+- engine_prepare_dataset：只准备当前 Company + 指定 Project 的建模数据集；tool_name=preprocess_dataset；参数 target_metric，可选 target_section/target_unit/project_id/preprocessing_config。
+- automl_training：用户明确说“建立/训练/重新训练模型”时使用；tool_name=train_model；参数 target_metric，可选 target_section/target_unit/project_id/algorithms/training_config/preprocessing_config。
+- predict_performance：用户明确要求用已建模型预测；tool_name=predict_model；参数 target_metric、project_id，以及 inputs=[配方/工艺字段字典] 或 sample_identifier；可选 model_id/model_version。不要因为缺模型而自动改成训练意图。
+- optimize_formula：用户明确要求用模型优化/逆向设计配方或工艺；tool_name=optimize_formula；参数 project_id、objectives、可选 variables/hard_constraints/soft_constraints/top_n/max_evaluations。objectives 中 target_name 使用业务字段原名，operator 仅可为 equal/greater_or_equal/less_or_equal/in_range/maximize/minimize。
+- recommend_next_experiments：用户明确要求推荐下一批/下一轮实验；tool_name=recommend_next_experiments；参数同 optimize_formula，可选 acquisition。
+- 项目号可以是负数；负数表示历史导入项目，不得丢弃负号。
+- 没有明确项目号时不要编造。后端只有在用户权限恰好包含一个项目时才自动绑定，否则会请求补充。
+- list_artifacts/get_chart_data 是后端工作流内部步骤，绝不能作为 tool_name 输出。
+- 语言模型只提取目标、输入与约束；不得生成 Artifact 路径、模型注册表路径、文件路径，不得自行决定 Tool 顺序。
+- 预测/优化若没有可用模型，后端只会询问是否建立模型，不会自动训练。
+
+旧 V0.2/V0.3 状态查询通常由上层确定性路由处理；新建模/预测/优化按第7节路由。
 - 普通材料知识、研发方法、概念解释、建议讨论、寒暄或其它不需要当前数据库/附件/RAG事实的问题，使用 general_conversation，tool_name=null，由 DeepSeek 通用回答层直接回答。
 - 要求当前数据库/样品/附件中的事实但缺少必要对象时，优先 needs_clarification=true，不要降级为没有证据的通用知识回答。
 - 明确要求尚未接入的真实设备控制、写数据库或其它执行动作时，使用 unsupported_future_feature；后端会让 DeepSeek解释能力边界，但不会伪装已经执行。
@@ -441,10 +504,12 @@ performance_rank, performance_statistics, experiment_series_analysis, data_quali
 analyze_cause, analyze_performance_difference,
 analyze_current_attachment, ask_current_attachment,
 search_historical_knowledge, sample_historical_similarity, joint_mysql_knowledge_analysis,
-database_explorer, general_conversation, unsupported_future_feature, clarification_required
+database_explorer, general_conversation, unsupported_future_feature, clarification_required,
+engine_prepare_dataset, automl_training, predict_performance, optimize_formula, recommend_next_experiments
 
 【tool_name 白名单】
-get_sample_context, get_formula, get_process, get_performance, compare_samples, find_samples, list_samples_for_analysis，或 null。
+get_sample_context, get_formula, get_process, get_performance, compare_samples, find_samples, list_samples_for_analysis,
+preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next_experiments，或 null。
 数据库 primary_intent 必须与对应 tool 一致；不要发明 query_sample_data 之类的新名字。
 
 只输出一个 JSON 对象，推荐 V2 格式：
@@ -496,6 +561,7 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
         hints: ConversationHints,
         field_catalog: dict[str, Any] | None = None,
         database_explorer_enabled: bool = False,
+        engine_workflow_enabled: bool = False,
     ) -> DeepSeekIntentDecision:
         raw_intent = str(
             data.get("primary_intent")
@@ -564,6 +630,16 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
         # unless the backend explicitly enabled the guarded explorer framework.
         if intent == "database_explorer" and not database_explorer_enabled:
             intent = "general_conversation"
+            tool_name = None
+
+        if intent in {
+            "engine_prepare_dataset",
+            "automl_training",
+            "predict_performance",
+            "optimize_formula",
+            "recommend_next_experiments",
+        } and not engine_workflow_enabled:
+            intent = "unsupported_future_feature"
             tool_name = None
 
         if intent in _SPECIAL_NO_TOOL_INTENTS:
@@ -681,6 +757,22 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                 "bounded_sql_retry": True,
                 "arbitrary_physical_table_access": False,
             })
+        elif intent in {
+            "engine_prepare_dataset",
+            "automl_training",
+            "predict_performance",
+            "optimize_formula",
+            "recommend_next_experiments",
+        }:
+            scope["data_source"] = "authorized_business_mysql_and_project_artifacts"
+            constraints.update({
+                "company_project_scope_enforced_by_backend": True,
+                "project_artifact_isolation": True,
+                "deterministic_tool_order": True,
+                "automatic_training": False,
+                "result_mode": "summary",
+                "llm_supplied_paths_ignored": True,
+            })
 
         model_needs_clarification = bool(data.get("needs_clarification", False))
         missing = self._missing_required_args(intent, args)
@@ -711,6 +803,11 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "find_samples_multi_condition",
             "similar_samples",
             "database_explorer",
+            "engine_prepare_dataset",
+            "automl_training",
+            "predict_performance",
+            "optimize_formula",
+            "recommend_next_experiments",
         }:
             domain = _DOMAIN_BY_INTENT[intent]
         elif domain not in _ALLOWED_DOMAINS:
@@ -740,6 +837,14 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
                 if intent == "find_samples_multi_condition"
                 else "2B-2.1"
                 if intent == "similar_samples"
+                else "ENGINE-WORKFLOW-0.1"
+                if intent in {
+                    "engine_prepare_dataset",
+                    "automl_training",
+                    "predict_performance",
+                    "optimize_formula",
+                    "recommend_next_experiments",
+                }
                 else "2.1"
             ),
         )
@@ -1284,6 +1389,63 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "database_explorer": set(),
             "general_conversation": set(),
             "unsupported_future_feature": set(),
+            "engine_prepare_dataset": {
+                "project_id",
+                "target_metric",
+                "target_section",
+                "target_unit",
+                "preprocessing_config",
+            },
+            "automl_training": {
+                "project_id",
+                "target_metric",
+                "target_section",
+                "target_unit",
+                "algorithms",
+                "preprocessing_config",
+                "training_config",
+            },
+            "predict_performance": {
+                "project_id",
+                "target_metric",
+                "model_id",
+                "model_version",
+                "inputs",
+                "sample_identifier",
+            },
+            "optimize_formula": {
+                "project_id",
+                "objectives",
+                "variables",
+                "hard_constraints",
+                "soft_constraints",
+                "top_n",
+                "random_seed",
+                "max_evaluations",
+                "time_limit",
+                "preference",
+                "model_quality_gate",
+                "algorithm_override",
+                "model_id",
+                "model_version",
+            },
+            "recommend_next_experiments": {
+                "project_id",
+                "objectives",
+                "variables",
+                "hard_constraints",
+                "soft_constraints",
+                "top_n",
+                "random_seed",
+                "max_evaluations",
+                "time_limit",
+                "preference",
+                "model_quality_gate",
+                "algorithm_override",
+                "acquisition",
+                "model_id",
+                "model_version",
+            },
         }
         allowed = allowed_by_intent.get(intent)
         if allowed is None:
@@ -1303,6 +1465,11 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             "historical_similar_case",
             "sample_historical_similarity",
             "joint_mysql_knowledge_analysis",
+            "engine_prepare_dataset",
+            "automl_training",
+            "predict_performance",
+            "optimize_formula",
+            "recommend_next_experiments",
         }:
             return args
 
@@ -1443,6 +1610,15 @@ get_sample_context, get_formula, get_process, get_performance, compare_samples, 
             )
         if intent == "similar_samples":
             return "你想以哪个样品作为参照？请提供样品 ID 或样品名称。"
+        if intent in {"engine_prepare_dataset", "automl_training"}:
+            return "你想为哪个目标字段准备数据或建立模型？例如“在项目115中为冲击强度建立模型”。"
+        if intent == "predict_performance":
+            return "你想预测哪个性能指标？请同时提供 Project，以及配方/工艺输入或样品 ID。"
+        if intent in {"optimize_formula", "recommend_next_experiments"}:
+            return (
+                "请说明 Project 和优化目标，例如“项目115中冲击强度不低于43、"
+                "MFR不低于8.5，推荐5组配方”。"
+            )
         return "当前信息还不足以确定要执行的材料研发操作，请补充样品、指标或分析范围。"
 
     @staticmethod

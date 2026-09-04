@@ -430,8 +430,16 @@ class LLMIntentRouter:
         system = """你是材料研发智能体的意图路由器。
 只输出 JSON，不要输出 SQL。
 允许的 tool_name 只有：
-get_sample_context, get_formula, get_process, get_performance, compare_samples, find_samples。
+get_sample_context, get_formula, get_process, get_performance, compare_samples, find_samples,
+preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next_experiments。
 注意：性能原因分析仍然使用 compare_samples，不新增生产数据库 Tool。
+建模、预测和优化必须使用以下固定意图/Tool 对：
+- engine_prepare_dataset -> preprocess_dataset，参数 target_metric/project_id；
+- automl_training -> train_model，仅在用户明确要求建立或训练模型时使用；
+- predict_performance -> predict_model，参数 target_metric/project_id，加 inputs 或 sample_identifier；
+- optimize_formula -> optimize_formula，参数 project_id/objectives；
+- recommend_next_experiments -> recommend_next_experiments，参数 project_id/objectives。
+项目号允许为负数。不得输出数据集路径、模型注册表路径或其它文件路径；预测/优化缺少模型时也不得擅自改成训练。
 JSON 格式：
 {"intent":"...", "tool_name":"...", "tool_args":{...}}
 比较需要 left_identifier/right_identifier；性能差异分析还可包含 target_metric/direction；

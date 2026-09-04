@@ -156,9 +156,19 @@ def _auto_ml() -> SkillSpec:
         name="auto_ml",
         display_name="AutoML",
         description="Dataset 准入、训练、交叉验证、评价和候选模型注册。",
-        intents=frozenset({"automl_training", "v013_modeling_status"}),
-        tool_allowlist=frozenset({"automl_engine", "v013_runtime_reports"}),
+        intents=frozenset({
+            "engine_prepare_dataset",
+            "automl_training",
+            "v013_modeling_status",
+        }),
+        tool_allowlist=frozenset({
+            "preprocess_dataset",
+            "train_model",
+            "v013_runtime_reports",
+        }),
         workflow=(
+            "authorized_project_snapshot",
+            "preprocess_dataset",
             "modeling_gate",
             "train_candidates",
             "cross_validation",
@@ -168,7 +178,15 @@ def _auto_ml() -> SkillSpec:
         evidence_rules=("模型结果必须引用 dataset_version 和评估指标",),
         guardrails=("Modeling Gate FAIL 时禁止正式建模",),
         error_strategy="checkpoint_and_fail_closed",
-        default_executor_family="deterministic",
+        executor_family_by_intent={
+            "engine_prepare_dataset": "engine_workflow",
+            "automl_training": "engine_workflow",
+            "v013_modeling_status": "deterministic",
+        },
+        input_required_by_intent={
+            "engine_prepare_dataset": ("target_metric",),
+            "automl_training": ("target_metric",),
+        },
     )
 
 
@@ -176,12 +194,12 @@ def _ensure_model() -> SkillSpec:
     return SkillSpec(
         name="ensure_model",
         display_name="Ensure Model",
-        description="在预测或优化前选择可用模型，缺失时受控触发 AutoML。",
+        description="在预测或优化前选择当前 Company/Project 的可用模型；缺失时请求用户明确建模。",
         intents=frozenset({"ensure_model"}),
-        tool_allowlist=frozenset({"model_registry", "automl_engine"}),
-        workflow=("query_model_registry", "validate_model", "trigger_automl_if_missing"),
+        tool_allowlist=frozenset({"list_artifacts", "train_model"}),
+        workflow=("query_model_registry", "validate_model", "request_training_if_missing"),
         evidence_rules=("必须返回 model_id、model_version 和 dataset_version",),
-        guardrails=("不得自动晋级模型",),
+        guardrails=("不得自动晋级模型", "不得在预测或优化请求中自动训练"),
         error_strategy="request_approval_or_fail_closed",
         default_executor_family="deterministic",
     )
@@ -193,12 +211,13 @@ def _prediction() -> SkillSpec:
         display_name="Prediction",
         description="输入校验、适用域判断和模型推理。",
         intents=frozenset({"predict_performance"}),
-        tool_allowlist=frozenset({"model_predictor", "applicability_domain"}),
-        workflow=("ensure_model", "validate_input", "applicability_domain", "predict"),
+        tool_allowlist=frozenset({"predict_model"}),
+        workflow=("list_artifacts", "ensure_model", "validate_input", "applicability_domain", "predict_model"),
         evidence_rules=("预测必须引用模型与数据集版本",),
         guardrails=("OUT_OF_DOMAIN 必须显式警告",),
         error_strategy="fail_closed_on_invalid_input",
-        default_executor_family="deterministic",
+        default_executor_family="engine_workflow",
+        input_required_by_intent={"predict_performance": ("target_metric",)},
     )
 
 
@@ -207,12 +226,23 @@ def _optimization() -> SkillSpec:
         name="optimization",
         display_name="Optimization",
         description="受约束的配方/工艺逆向设计、Pareto 排序与贝叶斯优化。",
-        intents=frozenset({"v014_inverse_design", "v014_next_experiments"}),
-        tool_allowlist=frozenset({"inverse_design_engine", "gaussian_process_bo"}),
+        intents=frozenset({
+            "optimize_formula",
+            "recommend_next_experiments",
+            "v014_inverse_design",
+            "v014_next_experiments",
+        }),
+        tool_allowlist=frozenset({
+            "optimize_formula",
+            "recommend_next_experiments",
+            "inverse_design_engine",
+            "gaussian_process_bo",
+        }),
         workflow=(
             "parse_constraints",
+            "list_artifacts",
             "ensure_model",
-            "generate_candidates",
+            "optimize_or_recommend",
             "predict_and_check_domain",
             "pareto_and_diversity",
             "final_report",
@@ -220,7 +250,16 @@ def _optimization() -> SkillSpec:
         evidence_rules=("候选必须引用模型版本、约束和适用域",),
         guardrails=("硬约束不得被 LLM 放宽", "不得把推荐写成实验事实"),
         error_strategy="checkpoint_and_return_near_misses",
-        default_executor_family="deterministic",
+        executor_family_by_intent={
+            "optimize_formula": "engine_workflow",
+            "recommend_next_experiments": "engine_workflow",
+            "v014_inverse_design": "deterministic",
+            "v014_next_experiments": "deterministic",
+        },
+        input_required_by_intent={
+            "optimize_formula": ("objectives",),
+            "recommend_next_experiments": ("objectives",),
+        },
     )
 
 

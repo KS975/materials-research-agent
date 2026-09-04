@@ -1,3 +1,14 @@
+# Engine Workflow Adapter V0.1
+
+- 新增 `EngineWorkflowAdapter`，把七个 framework-neutral Engine Tool 接入 Agent 自然语言执行链。
+- 新增建模数据准备、AutoML 训练、模型预测、配方/工艺优化和下一批实验推荐五类意图。
+- DeepSeek 只提取目标和约束；Company/Project/Session Artifact 路径与 Tool 顺序由后端确定。
+- 模型注册表按 Company + Project 隔离，数据集和优化产物进一步按会话隔离；负数历史项目编号全程保留。
+- Modeling Gate FAIL、授权样品扫描不完整或超出配置上限时禁止训练。
+- 预测/优化缺少模型时返回 `model_required`，不在用户未明确要求时自动训练。
+- `list_artifacts`、`get_chart_data` 仅作为工作流内部步骤，不允许 DeepSeek直接选择。
+- 新增新旧优化路线开关 `ENGINE_OPTIMIZATION_ROUTE=legacy|shadow|engine`。
+
 # Database Navigator V0.1.1 - 历史导入项目
 
 - 数据库项目目录不再只依赖 `mat_project`，同时纳入当前公司样品实际引用的 `project_id`。

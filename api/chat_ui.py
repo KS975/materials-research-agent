@@ -117,6 +117,11 @@ _INTENT_PROGRESS_NAMES = {
     "general_conversation": "通用问答",
     "v014_inverse_design": "多目标逆向设计",
     "v014_next_experiments": "下一轮实验推荐",
+    "engine_prepare_dataset": "准备建模数据集",
+    "automl_training": "自动清洗与建模",
+    "predict_performance": "调用模型预测性能",
+    "optimize_formula": "模型驱动配方优化",
+    "recommend_next_experiments": "模型驱动下一批实验推荐",
 }
 
 
@@ -132,6 +137,8 @@ def _intent_progress_details(intent: str, tool_args: dict[str, Any]) -> list[dic
         "top_n": "返回数量",
         "project_id": "Project",
         "history_query": "历史检索主题",
+        "model_id": "模型",
+        "model_version": "模型版本",
     }
     output = [{
         "label": "任务类型",
@@ -195,6 +202,11 @@ def _needs_authorized_field_catalog(message: str) -> bool:
     """
     text = str(message or "").strip()
     if looks_like_multi_condition_request(text):
+        return True
+    if any(marker in text.casefold() for marker in (
+        "建模", "训练模型", "建立模型", "automl", "预测", "配方优化",
+        "优化配方", "逆向设计", "推荐实验", "下一批实验", "下一轮实验",
+    )):
         return True
     return bool(
         "样品" in text
@@ -623,13 +635,20 @@ def _classify_chat_ui_primary_family(state: dict[str, Any]) -> dict[str, Any]:
             intent="v020_feedback_loop_status",
             tool_name="v020_campaign_runtime",
         )
-    if looks_like_inverse_design(body.message):
+    engine_route = str(
+        getattr(container.settings, "engine_optimization_route", "legacy") or "legacy"
+    )
+    engine_route_active = bool(
+        getattr(container.settings, "engine_workflow_enabled", False)
+        and engine_route == "engine"
+    )
+    if looks_like_inverse_design(body.message) and not engine_route_active:
         return with_skill(
             primary_family="deterministic",
             intent="v014_inverse_design",
             tool_name="inverse_design_engine",
         )
-    if looks_like_next_experiments(body.message):
+    if looks_like_next_experiments(body.message) and not engine_route_active:
         return with_skill(
             primary_family="deterministic",
             intent="v014_next_experiments",
@@ -662,6 +681,14 @@ def _classify_chat_ui_semantic_family(state: dict[str, Any]) -> dict[str, Any]:
 def _semantic_family_for_intent(intent: str, router_name: str = "") -> str:
     if intent == "database_explorer" or router_name == "deepseek_database_explorer":
         return "database_explorer"
+    if intent in {
+        "engine_prepare_dataset",
+        "automl_training",
+        "predict_performance",
+        "optimize_formula",
+        "recommend_next_experiments",
+    } or router_name == "engine_workflow_adapter":
+        return "engine_workflow"
     if intent in {
         "sample_historical_similarity",
         "joint_mysql_knowledge_analysis",
@@ -778,6 +805,12 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
             database_explorer_enabled=database_explorer_enabled,
             database_explorer_mode=str(
                 getattr(database_explorer_skill, "mode", "off")
+            ),
+            engine_workflow_enabled=bool(
+                getattr(container.settings, "engine_workflow_enabled", False)
+            ),
+            engine_optimization_route=str(
+                getattr(container.settings, "engine_optimization_route", "legacy")
             ),
         )
         router_name = "deepseek"
@@ -900,6 +933,7 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
         "current_attachment",
         "general_conversation",
         "material_tool",
+        "engine_workflow",
     }:
         raise HTTPException(
             status_code=400,
@@ -917,6 +951,7 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
         "current_attachment": "当前附件问答",
         "general_conversation": "通用回答或澄清",
         "material_tool": "确定性材料工具",
+        "engine_workflow": "建模/预测/优化工作流",
     }
     emit_progress(
         "skill_composition",
@@ -1269,6 +1304,50 @@ def _execute_semantic_material_tool(state: dict[str, Any]) -> ChatUIResponse:
         warnings=warnings,
         router=router_name,
         reasoning_summary=summary,
+        routing=routing_meta,
+    )
+
+
+def _execute_semantic_engine_workflow(state: dict[str, Any]) -> ChatUIResponse:
+    _validate_semantic_skill(state)
+    body, ctx, container, intent, tool_name, tool_args, router_name, summary, routing_meta = (
+        _semantic_state(state)
+    )
+    if tool_name is None:
+        raise HTTPException(400, "已识别引擎工作流，但没有受控入口 Tool")
+    execution_args = {
+        **dict(tool_args),
+        "_workflow_id": str(state.get("workflow_id") or ""),
+        "_conversation_id": str(body.conversation_id or ""),
+    }
+    try:
+        result = container.core.execute(
+            intent,
+            tool_name,
+            execution_args,
+            ctx,
+        )
+        answer = container.core.answer(body.message, intent, result)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Engine Workflow 执行失败：{type(exc).__name__}: {exc}",
+        ) from exc
+    return ChatUIResponse(
+        answer=answer,
+        intent=intent,
+        tool_name=tool_name,
+        tool_args=tool_args,
+        data=result,
+        evidence=list(result.get("evidence") or []),
+        warnings=list(result.get("warnings") or []),
+        router="engine_workflow_adapter" if router_name == "deepseek" else router_name,
+        reasoning_summary=(
+            summary
+            or "DeepSeek 只提取目标和约束；权限、Artifact 路径及 Tool 顺序由后端确定性控制。"
+        ),
         routing=routing_meta,
     )
 
@@ -1788,6 +1867,12 @@ def _execute_chat_ui_legacy(
             database_explorer_mode=str(
                 getattr(database_explorer_skill, "mode", "off")
             ),
+            engine_workflow_enabled=bool(
+                getattr(container.settings, "engine_workflow_enabled", False)
+            ),
+            engine_optimization_route=str(
+                getattr(container.settings, "engine_optimization_route", "legacy")
+            ),
         )
         router_name = "deepseek"
         summary = decision.reasoning_summary
@@ -2164,6 +2249,7 @@ _chat_ui_graph = build_chat_ui_graph(
         "current_attachment": _execute_semantic_current_attachment,
         "general_conversation": _execute_semantic_general_conversation,
         "material_tool": _execute_semantic_material_tool,
+        "engine_workflow": _execute_semantic_engine_workflow,
     },
 )
 
@@ -2176,7 +2262,7 @@ def chat_ui(
 ):
     """Run the production Chat UI request through LangGraph V4.
 
-    V4 keeps V3 checkpoints and moves semantic planning plus the five semantic
+    V4 keeps V3 checkpoints and moves semantic planning plus the six semantic
     execution families into native graph nodes.
     """
 

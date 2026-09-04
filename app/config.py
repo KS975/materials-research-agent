@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     database_explorer_query_timeout_ms: int = 8000
     database_explorer_max_result_chars: int = 60000
 
+    # Agent adoption for the independent engine tools. Engine-owned files are
+    # always placed below a host-controlled company/project/session scope.
+    engine_workflow_enabled: bool = True
+    engine_artifact_root: str = ".runtime/engine_artifacts"
+    engine_max_source_rows: int = 5000
+    engine_default_algorithms: str = "linear_regression,ridge"
+    # ``legacy`` and ``shadow`` keep V0.1.4 T17/T18 as the optimization route;
+    # ``engine`` sends those requests through EngineWorkflowAdapter. ``shadow``
+    # is reserved as the safe rollout value until dual-run comparison is enabled.
+    engine_optimization_route: Literal["legacy", "shadow", "engine"] = "legacy"
+
     # V0.1.2-A: current Chat temporary attachments
     chat_upload_dir: str = ".runtime/chat_uploads"
     chat_upload_max_mb: int = 25
@@ -125,6 +136,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DATABASE_EXPLORER_QUERY_TIMEOUT_MS 必须在 100 到 120000 之间"
             )
+        if self.engine_workflow_enabled and not self.engine_artifact_root.strip():
+            raise ValueError("ENGINE_ARTIFACT_ROOT 不能为空")
+        if not 10 <= self.engine_max_source_rows <= 100000:
+            raise ValueError("ENGINE_MAX_SOURCE_ROWS 必须在10到100000之间")
         if not 100_000 <= self.chat_ui_workflow_max_response_chars <= 10_000_000:
             raise ValueError(
                 "CHAT_UI_WORKFLOW_MAX_RESPONSE_CHARS 必须在100000到10000000之间"
