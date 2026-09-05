@@ -305,6 +305,30 @@ class EngineWorkflowAdapterTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "MODEL_REQUIRED")
 
+    def test_ensure_model_returns_deterministic_selection(self) -> None:
+        registry = FakeRegistry(
+            models=[
+                {
+                    "model_id": "model_test",
+                    "version": "v001",
+                    "target_name": "performance.impact",
+                    "dataset_artifact_id": "dataset_test",
+                    "status": "CANDIDATE",
+                }
+            ]
+        )
+        result = self._adapter(registry).execute(
+            "ensure_model",
+            "list_artifacts",
+            {"project_id": 1, "target_metric": "impact"},
+            self.ctx,
+        )
+        self.assertEqual(result["status"], "OK")
+        selected = result["result"]["selected_models"]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["model_id"], "model_test")
+        self.assertEqual(selected[0]["version"], "v001")
+
     def test_skill_contracts_bind_public_engine_tools(self) -> None:
         registry = build_default_skill_registry()
         composer = ScenarioWorkflowComposer(registry)
@@ -329,6 +353,21 @@ class EngineWorkflowAdapterTests(unittest.TestCase):
             )
             self.assertEqual(plan.primary_skill, skill_name)
             self.assertEqual(plan.executor_family, "engine_workflow")
+
+    def test_model_dependent_scenario_composes_fixed_dag(self) -> None:
+        registry = build_default_skill_registry()
+        composer = ScenarioWorkflowComposer(registry)
+        plan = composer.compose(
+            intent="predict_performance",
+            tool_name="predict_model",
+            tool_args={"project_id": 1, "target_metric": "impact"},
+        )
+        self.assertEqual(
+            [step.operation for step in plan.steps],
+            ["ensure_model", "predict_performance"],
+        )
+        self.assertEqual(plan.primary_skill, "prediction")
+        self.assertEqual(plan.to_dict()["terminal_operation"], "predict_performance")
 
 
 if __name__ == "__main__":

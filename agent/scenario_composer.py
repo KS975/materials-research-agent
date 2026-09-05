@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from agent.skill_registry import SkillRegistry
@@ -40,31 +40,34 @@ class ScenarioPlan:
 
     @property
     def primary_skill(self) -> str:
-        return self.steps[0].skill_name
+        return self.terminal_step.skill_name
+
+    @property
+    def terminal_step(self) -> SkillPlanStep:
+        return self.steps[-1]
+
+    @property
+    def terminal_skill_display_name(self) -> str:
+        return self.terminal_step.skill_display_name
 
     @property
     def executor_family(self) -> str:
-        return self.steps[0].executor_family
+        return self.terminal_step.executor_family
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "version": "skill-scenario-v1",
+            "version": "skill-scenario-v2",
             "scenario_name": self.scenario_name,
             "primary_operation": self.primary_operation,
             "primary_skill": self.primary_skill,
+            "terminal_operation": self.terminal_step.operation,
             "requires_approval": self.requires_approval,
             "steps": [step.to_dict() for step in self.steps],
         }
 
 
 class ScenarioWorkflowComposer:
-    """Convert a fine-grained intent into an auditable Skill plan.
-
-    V1 intentionally composes one atomic Skill per existing operation.  The
-    contract already supports multiple ordered steps, so future scenarios such
-    as Ensure Model -> Optimization -> Prediction can be added without changing
-    the API or checkpoint shape.
-    """
+    """Convert a fine-grained intent into an auditable fixed Skill DAG."""
 
     def __init__(self, registry: SkillRegistry) -> None:
         self.registry = registry
@@ -82,7 +85,7 @@ class ScenarioWorkflowComposer:
             tool_name=tool_name,
             tool_args=args,
         )
-        step = SkillPlanStep(
+        terminal_step = SkillPlanStep(
             step_id="skill-1",
             skill_name=spec.name,
             skill_display_name=spec.display_name,
@@ -92,10 +95,42 @@ class ScenarioWorkflowComposer:
             executor_family=spec.executor_family_for(intent),
             workflow=spec.workflow,
         )
+        steps = [terminal_step]
+
+        # Model-dependent scenarios share one deterministic pre-step. The
+        # public intent remains unchanged; ensure_model is an internal Skill
+        # and never becomes an LLM-selectable modeling shortcut.
+        if intent in {
+            "predict_performance",
+            "optimize_formula",
+            "recommend_next_experiments",
+        }:
+            ensure_spec = self.registry.get("ensure_model")
+            ensure_args = dict(args)
+            ensure_spec.validate_dispatch(
+                intent="ensure_model",
+                tool_name="list_artifacts",
+                tool_args=ensure_args,
+            )
+            ensure_step = SkillPlanStep(
+                step_id="skill-1",
+                skill_name=ensure_spec.name,
+                skill_display_name=ensure_spec.display_name,
+                operation="ensure_model",
+                tool_name="list_artifacts",
+                tool_args=ensure_args,
+                executor_family=ensure_spec.executor_family_for("ensure_model"),
+                workflow=ensure_spec.workflow,
+            )
+            steps = [
+                ensure_step,
+                replace(terminal_step, step_id="skill-2"),
+            ]
+
         return ScenarioPlan(
             scenario_name=f"{spec.name}.{intent}",
             primary_operation=intent,
-            steps=(step,),
+            steps=tuple(steps),
             requires_approval=bool(spec.approval_points),
         )
 

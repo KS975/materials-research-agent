@@ -19,6 +19,7 @@ from schemas.user_context import UserContext
 
 
 _PUBLIC_TOOL_BY_INTENT = {
+    "ensure_model": "list_artifacts",
     "engine_prepare_dataset": "preprocess_dataset",
     "automl_training": "train_model",
     "predict_performance": "predict_model",
@@ -146,6 +147,8 @@ class EngineWorkflowAdapter:
         }
         try:
             scope = self._resolve_scope(ctx, args, workflow_id, conversation_id)
+            if intent == "ensure_model":
+                return self._execute_ensure_model(scope, args)
             if intent == "engine_prepare_dataset":
                 return self._execute_prepare(scope, args)
             if intent == "automl_training":
@@ -257,6 +260,64 @@ class EngineWorkflowAdapter:
             ["list_authorized_samples", "preprocess_dataset"],
             answer,
             snapshot.warnings,
+        )
+
+    def _execute_ensure_model(
+        self,
+        scope: _ArtifactScope,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        targets: list[str] = []
+        if args.get("target_metric") is not None:
+            targets.append(self._required_string(args.get("target_metric")))
+        else:
+            objectives = args.get("objectives")
+            if not isinstance(objectives, list) or not objectives:
+                return self._failure(
+                    "INVALID_INPUT",
+                    "确认模型需要 target_metric 或 objectives。",
+                )
+            for objective in objectives:
+                if not isinstance(objective, dict):
+                    return self._failure(
+                        "INVALID_INPUT",
+                        "objectives 必须是 JSON 对象数组。",
+                    )
+                targets.append(
+                    self._required_string(
+                        objective.get("target_name") or objective.get("target_metric")
+                    )
+                )
+
+        records = self._model_records(scope)
+        selected_models: list[dict[str, Any]] = []
+        for target in targets:
+            selected = self._select_model(
+                records,
+                target,
+                model_id=args.get("model_id"),
+                version=args.get("model_version"),
+            )
+            if selected is None:
+                return self._model_required(scope, target, records)
+            selected_models.append({
+                "requested_target": target,
+                "model_id": str(selected.get("model_id") or ""),
+                "version": str(selected.get("version") or ""),
+                "target_name": str(selected.get("target_name") or ""),
+                "dataset_artifact_id": selected.get("dataset_artifact_id"),
+                "status": str(selected.get("status") or "CANDIDATE"),
+            })
+
+        return self._success(
+            scope,
+            "ensure_model",
+            {
+                "selected_model_count": len(selected_models),
+                "selected_models": selected_models,
+            },
+            ["list_artifacts", "select_model"],
+            f"Project {scope.project_id} 已确认 {len(selected_models)} 个可用模型。",
         )
 
     def _execute_training(

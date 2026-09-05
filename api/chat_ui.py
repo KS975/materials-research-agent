@@ -958,19 +958,21 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
         "completed",
         "Skill 编排完成",
         (
-            f"已选择 {scenario_plan.steps[0].skill_display_name}，"
+            f"已选择 {scenario_plan.terminal_skill_display_name}，"
             f"执行 operation={planned_intent}。"
         ),
         intent=intent,
         semantic_family=semantic_family,
         skill_name=scenario_plan.primary_skill,
         detail_items=[
-            {"label": "Skill", "value": scenario_plan.steps[0].skill_display_name},
+            {"label": "Skill", "value": scenario_plan.terminal_skill_display_name},
             {"label": "Operation", "value": str(planned_intent)},
             {"label": "执行节点", "value": family_labels[semantic_family]},
             {
                 "label": "固定 Workflow",
-                "value": " → ".join(scenario_plan.steps[0].workflow),
+                "value": " → ".join(
+                    step.operation for step in scenario_plan.steps
+                ),
             },
         ],
     )

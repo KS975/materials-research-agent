@@ -4,9 +4,10 @@ import json
 from typing import Any
 
 from agent.router import LLMIntentRouter, RuleIntentRouter
-from agent.scenario_composer import ScenarioWorkflowComposer
+from agent.scenario_composer import ScenarioWorkflowComposer, SkillPlanStep
 from agent.skill_registry import SkillRegistry
 from agent.tool_registry import ToolRegistry
+from agent.workflow_orchestrator import ScenarioWorkflowOrchestrator
 from llm.base import LLMProvider
 from schemas.user_context import UserContext
 from skills.analysis import AnalysisSkill
@@ -45,6 +46,7 @@ class AgentCore:
             if engine_workflow_adapter is not None
             else None
         )
+        self.workflow_orchestrator = ScenarioWorkflowOrchestrator()
         data_query = DataQuerySkill(registry)
         comparison = ComparisonSkill(registry)
         analysis = AnalysisSkill(registry)
@@ -60,6 +62,9 @@ class AgentCore:
             ],
             "data_governance": [data_query, self.material_intelligence_skill],
             "auto_ml": (
+                [self.engine_workflow_skill] if self.engine_workflow_skill else []
+            ),
+            "ensure_model": (
                 [self.engine_workflow_skill] if self.engine_workflow_skill else []
             ),
             "prediction": (
@@ -92,7 +97,30 @@ class AgentCore:
             tool_name=tool_name,
             tool_args=tool_args,
         )
-        handlers = self.skill_handlers.get(plan.primary_skill, [])
+        if len(plan.steps) > 1:
+            if self.engine_workflow_skill is None:
+                raise ValueError(
+                    "场景 Workflow 需要 EngineWorkflow 执行器，但当前未启用。"
+                )
+            return self.workflow_orchestrator.execute(
+                plan=plan,
+                tool_args=dict(tool_args),
+                ctx=ctx,
+                execute_skill=self.execute_skill_step,
+            )
+
+        result = self.execute_skill_step(plan.steps[0], dict(tool_args), ctx)
+        return result
+
+    def execute_skill_step(
+        self,
+        step: SkillPlanStep,
+        tool_args: dict[str, Any],
+        ctx: UserContext,
+    ) -> dict[str, Any]:
+        intent = step.operation
+        tool_name = step.tool_name
+        handlers = self.skill_handlers.get(step.skill_name, [])
         for handler in handlers:
             if handler.can_handle(intent):
                 if isinstance(handler, MaterialIntelligenceSkill):
@@ -111,11 +139,11 @@ class AgentCore:
                     )
                 else:
                     result = handler.execute(tool_name, tool_args, ctx)
-                self.skill_registry.get(plan.primary_skill).validate_output(result)
+                self.skill_registry.get(step.skill_name).validate_output(result)
                 return result
         raise ValueError(
             "Skill 已注册但没有运行处理器："
-            f"skill={plan.primary_skill}, operation={intent}"
+            f"skill={step.skill_name}, operation={intent}"
         )
 
     def answer(

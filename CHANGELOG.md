@@ -1,3 +1,11 @@
+# Scenario Workflow & Engine Tasks V0.2
+
+- `ScenarioWorkflowComposer` 将模型依赖场景编排为固定多 Skill DAG：`ensure_model -> prediction / optimization / next experiments`。
+- 新增内部 `ensure_model` 确认步骤，缺少可用模型时短路返回 `MODEL_REQUIRED`，不会隐式训练。
+- 新增 `ScenarioWorkflowOrchestrator`，按计划顺序执行 Skill、传递模型选择结果并记录执行轨迹。
+- 新增 Engine Task 异步任务体系：`task_id`、Worker 池、原子检查点、结构化进度、取消、恢复、审批和中断识别。
+- 新增 `POST/GET /api/v1/engine-tasks` 及 cancel/approve/resume 动作接口；任务执行中只返回阶段事件，终态才返回完整报告。
+
 # Engine Workflow Adapter V0.1
 
 - 新增 `EngineWorkflowAdapter`，把七个 framework-neutral Engine Tool 接入 Agent 自然语言执行链。

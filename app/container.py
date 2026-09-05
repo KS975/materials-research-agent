@@ -28,6 +28,7 @@ from file_processing import UnifiedFileParser
 from runtime.chat_attachments import ChatAttachmentStore
 from runtime.chat_ui_workflow import ChatUIWorkflowStore
 from runtime.chat_history import ChatHistoryStore
+from runtime.engine_tasks import EngineTaskManager, EngineTaskStore
 from skills.current_attachment import CurrentAttachmentSkill
 from skills.database_explorer import DatabaseExplorerSkill
 from skills.general_conversation import GeneralConversationFallbackSkill
@@ -190,6 +191,19 @@ class ApplicationContainer:
         )
         self.runtime = create_runtime_store(settings)
         self.agent = MaterialsAgentService(self.core, self.runtime)
+        self.engine_task_store = EngineTaskStore(
+            settings.engine_task_dir,
+            max_result_chars=settings.engine_task_max_result_chars,
+            checkpoint_retries=settings.engine_task_checkpoint_retries,
+            lease_seconds=settings.engine_task_lease_seconds,
+            max_events=settings.engine_task_max_events,
+        )
+        self.engine_task_manager = EngineTaskManager(
+            core=self.core,
+            store=self.engine_task_store,
+            worker_count=settings.engine_task_workers,
+        )
+        self.engine_task_manager.recover_interrupted()
 
     @contextmanager
     def open_knowledge_repository(self):

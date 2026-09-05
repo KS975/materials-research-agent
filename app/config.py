@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # is reserved as the safe rollout value until dual-run comparison is enabled.
     engine_optimization_route: Literal["legacy", "shadow", "engine"] = "legacy"
 
+    # Asynchronous engine tasks. Files are scoped by company/user and each
+    # completed Skill is checkpointed before the next Skill starts.
+    engine_task_dir: str = ".runtime/engine_tasks"
+    engine_task_workers: int = 2
+    engine_task_max_result_chars: int = 2_000_000
+    engine_task_checkpoint_retries: int = 3
+    engine_task_lease_seconds: int = 300
+    engine_task_max_events: int = 200
+
     # V0.1.2-A: current Chat temporary attachments
     chat_upload_dir: str = ".runtime/chat_uploads"
     chat_upload_max_mb: int = 25
@@ -159,6 +168,20 @@ class Settings(BaseSettings):
                 "ENGINE_ALLOWED_MODEL_STATUSES 仅支持 "
                 "EXPERIMENTAL/CANDIDATE/VALIDATED/APPROVED/ACTIVE"
             )
+        if not self.engine_task_dir.strip():
+            raise ValueError("ENGINE_TASK_DIR 不能为空")
+        if not 1 <= self.engine_task_workers <= 16:
+            raise ValueError("ENGINE_TASK_WORKERS 必须在1到16之间")
+        if not 100_000 <= self.engine_task_max_result_chars <= 10_000_000:
+            raise ValueError(
+                "ENGINE_TASK_MAX_RESULT_CHARS 必须在100000到10000000之间"
+            )
+        if not 1 <= self.engine_task_checkpoint_retries <= 5:
+            raise ValueError("ENGINE_TASK_CHECKPOINT_RETRIES 必须在1到5之间")
+        if not 10 <= self.engine_task_lease_seconds <= 3600:
+            raise ValueError("ENGINE_TASK_LEASE_SECONDS 必须在10到3600之间")
+        if not 20 <= self.engine_task_max_events <= 1000:
+            raise ValueError("ENGINE_TASK_MAX_EVENTS 必须在20到1000之间")
         if not 100_000 <= self.chat_ui_workflow_max_response_chars <= 10_000_000:
             raise ValueError(
                 "CHAT_UI_WORKFLOW_MAX_RESPONSE_CHARS 必须在100000到10000000之间"

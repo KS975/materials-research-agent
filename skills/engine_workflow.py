@@ -10,6 +10,7 @@ class EngineWorkflowSkill:
     """Dispatch the five public engine intents to the deterministic adapter."""
 
     intents = {
+        "ensure_model",
         "engine_prepare_dataset",
         "automl_training",
         "predict_performance",
@@ -18,6 +19,7 @@ class EngineWorkflowSkill:
     }
 
     _labels = {
+        "ensure_model": "确认可用模型",
         "engine_prepare_dataset": "准备建模数据集",
         "automl_training": "自动机器学习建模",
         "predict_performance": "模型性能预测",
