@@ -5,6 +5,8 @@
 - 新增 `ScenarioWorkflowOrchestrator`，按计划顺序执行 Skill、传递模型选择结果并记录执行轨迹。
 - 新增 Engine Task 异步任务体系：`task_id`、Worker 池、原子检查点、结构化进度、取消、恢复、审批和中断识别。
 - 新增 `POST/GET /api/v1/engine-tasks` 及 cancel/approve/resume 动作接口；任务执行中只返回阶段事件，终态才返回完整报告。
+- `ToolRegistry` 增加统一 JSON Schema 校验、`user_context/host_scoped` 权限边界和结构化调用审计；审计以公司/用户隔离的 JSONL 过渡存储，不记录业务参数值。
+- 拆分 `EngineWorkflowAdapter`：ScopeResolver、SnapshotService、ModelSelector 与 ResultBuilder 独立成服务，Adapter 回归场景编排职责。
 
 # Engine Workflow Adapter V0.1
 

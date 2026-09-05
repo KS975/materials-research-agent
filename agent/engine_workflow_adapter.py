@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import re
-from dataclasses import dataclass, replace
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
-import pandas as pd
-
-from agent.field_catalog import (
-    bind_metric_to_catalog,
-    build_material_field_catalog,
-    normalize_field_name,
+from agent.engine_model_selector import EngineModelSelector
+from agent.engine_result_builder import EngineResultBuilder
+from agent.engine_scope_resolver import EngineScopeResolver
+from agent.engine_snapshot_service import EngineSnapshotService
+from agent.engine_workflow_types import (
+    ArtifactScope as _ArtifactScope,
+    EngineWorkflowToolError,
+    SourceSnapshot as _SourceSnapshot,
 )
 from schemas.user_context import UserContext
 
@@ -54,37 +53,6 @@ _PUBLIC_ARG_KEYS = {
 }
 
 
-class EngineWorkflowToolError(RuntimeError):
-    """Carry a structured engine-tool failure without leaking an exception."""
-
-    def __init__(self, result: dict[str, Any]):
-        error = dict(result.get("error") or {})
-        super().__init__(str(error.get("message") or "engine tool failed"))
-        self.result = result
-
-
-@dataclass(frozen=True, slots=True)
-class _ArtifactScope:
-    ctx: UserContext
-    company_id: str
-    project_id: int
-    project_root: Path
-    model_registry_path: Path
-    session_root: Path
-    conversation_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class _SourceSnapshot:
-    path: Path
-    source_hash: str
-    records: list[dict[str, Any]]
-    catalog: dict[str, Any]
-    numeric_feature_fields: list[str]
-    sample_count: int
-    warnings: list[str]
-
-
 class EngineWorkflowAdapter:
     """Deterministic host adapter for the framework-neutral engine tools.
 
@@ -116,7 +84,13 @@ class EngineWorkflowAdapter:
         }
         if not self.allowed_model_statuses:
             raise ValueError("allowed_model_statuses must not be empty")
-        self.artifact_root = Path(artifact_root).resolve()
+        self.model_selector = EngineModelSelector(self.allowed_model_statuses)
+        self.snapshot_service = EngineSnapshotService(
+            registry,
+            max_source_rows=self.max_source_rows,
+        )
+        self.scope_resolver = EngineScopeResolver(artifact_root)
+        self.result_builder = EngineResultBuilder()
 
     def execute(
         self,
@@ -178,48 +152,7 @@ class EngineWorkflowAdapter:
         workflow_id: str,
         conversation_id: str,
     ) -> _ArtifactScope:
-        raw_project_id = args.get("project_id")
-        if raw_project_id is None:
-            if len(ctx.project_ids) == 1:
-                raw_project_id = ctx.project_ids[0]
-            else:
-                raise ValueError(
-                    "无法唯一确定 Project；请明确 project_id 后再执行引擎工作流。"
-                )
-        try:
-            project_id = int(raw_project_id)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("project_id 必须是整数。") from exc
-        if not ctx.can_access_project(project_id):
-            raise PermissionError(
-                f"当前用户无权访问 Company={ctx.company_id} Project={project_id}。"
-            )
-
-        project_ctx = replace(
-            ctx,
-            project_ids=(project_id,),
-            all_projects=False,
-        )
-        project_root = (
-            self.artifact_root
-            / "companies"
-            / self._safe_token(ctx.company_id, "company")
-            / "projects"
-            / self._safe_token(f"project_{project_id}", "project")
-        )
-        conversation_token = conversation_id or workflow_id or "adhoc"
-        session_root = project_root / "sessions" / self._session_token(
-            conversation_token
-        )
-        return _ArtifactScope(
-            ctx=project_ctx,
-            company_id=ctx.company_id,
-            project_id=project_id,
-            project_root=project_root,
-            model_registry_path=project_root / "models" / "model-registry.json",
-            session_root=session_root,
-            conversation_id=conversation_token,
-        )
+        return self.scope_resolver.resolve(ctx, args, workflow_id, conversation_id)
 
     def _execute_prepare(
         self,
@@ -618,195 +551,26 @@ class EngineWorkflowAdapter:
         scope: _ArtifactScope,
         args: dict[str, Any],
     ) -> tuple[_SourceSnapshot, str, dict[str, Any]]:
-        target_metric = self._required_string(args.get("target_metric"))
-        snapshot = self._authorized_snapshot(scope)
-        catalog = snapshot.catalog
-        binding = bind_metric_to_catalog(
-            target_metric,
-            catalog,
-            section=str(args.get("target_section") or "auto"),
-        )
-        if binding.get("status") != "ok":
-            candidates = ", ".join(
-                str(item) for item in binding.get("candidates") or []
-            )
-            suffix = f"候选字段：{candidates}。" if candidates else ""
-            raise ValueError(
-                f"目标字段“{target_metric}”未唯一绑定到授权数据字段。{suffix}"
-            )
-        section = str(binding.get("section"))
-        normalized = normalize_field_name(binding.get("canonical"))
-        entry = self._catalog_entry(catalog, section, normalized)
-        if int(entry.get("ambiguous_sample_count") or 0) > 0:
-            raise ValueError(f"目标字段 {target_metric} 在授权数据中存在同名多条记录。")
-        units = [str(item) for item in entry.get("units") or []]
-        requested_unit = str(args.get("target_unit") or "").strip()
-        if len(units) > 1:
-            raise ValueError(
-                f"目标字段 {target_metric} 存在多种单位：{', '.join(units)}。"
-            )
-        if requested_unit and units and requested_unit not in units:
-            raise ValueError(
-                f"目标单位 {requested_unit} 与数据记录单位 {units[0]} 不一致。"
-            )
-
-        column = self._dynamic_column(section, normalized, catalog)
-        metadata = {
-            "target_fields": [column],
-            "identifier_fields": ["sample_id"],
-            "units": {column: requested_unit or (units[0] if units else "")},
-        }
-        return snapshot, column, metadata
+        return self.snapshot_service.build_dataset_inputs(scope, args)
 
     def _authorized_snapshot(self, scope: _ArtifactScope) -> _SourceSnapshot:
-        source = self.registry.execute(
-            "list_samples_for_analysis",
-            keyword="",
-            ctx=scope.ctx,
-            limit=500,
-        )
-        if not isinstance(source, dict) or source.get("status") != "ok":
-            raise ValueError("授权项目数据快照读取失败。")
-        if not source.get("scan_complete", True):
-            raise ValueError("授权项目数据扫描未完整结束，已阻止建模或优化。")
-        sample_count = int(source.get("count") or 0)
-        if sample_count <= 0:
-            raise ValueError("当前授权项目没有可用于建模或优化的样品数据。")
-        if sample_count > self.max_source_rows:
-            raise ValueError(
-                f"授权样品数 {sample_count} 超过配置上限 {self.max_source_rows}。"
-            )
-        catalog = build_material_field_catalog(source)
-        records, warnings = self._flatten_samples(source.get("samples") or [])
-        if not records:
-            raise ValueError("授权样品字段解析后没有可用数据行。")
-        numeric_feature_fields = self._coerce_numeric_columns(records)
-        serialized = json.dumps(
-            records, ensure_ascii=False, sort_keys=True, default=str
-        ).encode("utf-8")
-        data_hash = hashlib.sha256(serialized).hexdigest()
-        source_dir = scope.session_root / "source_snapshots"
-        source_dir.mkdir(parents=True, exist_ok=True)
-        source_path = source_dir / f"authorized_project_{data_hash[:20]}.csv"
-        if not source_path.exists():
-            pd.DataFrame.from_records(records).to_csv(
-                source_path, index=False, encoding="utf-8"
-            )
-        file_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
-        return _SourceSnapshot(
-            path=source_path,
-            source_hash=file_hash,
-            records=records,
-            catalog=catalog,
-            numeric_feature_fields=numeric_feature_fields,
-            sample_count=sample_count,
-            warnings=warnings,
-        )
+        return self.snapshot_service.snapshot(scope)
 
-    @staticmethod
     def _apply_dataset_field_config(
+        self,
         user_config: dict[str, Any],
         snapshot: _SourceSnapshot,
         target_column: str,
     ) -> None:
-        user_config["target_fields"] = [target_column]
-        user_config["identifier_fields"] = ["sample_id"]
-        if user_config.get("feature_fields") is None:
-            user_config["feature_fields"] = [
-                item for item in snapshot.numeric_feature_fields
-                if item != target_column and not item.startswith("performance.")
-            ]
-            return
-        feature_fields = [
-            str(item).strip() for item in user_config["feature_fields"]
-            if str(item).strip()
-        ]
-        if not feature_fields:
-            raise ValueError("feature_fields 不能为空。")
-        if target_column in feature_fields:
-            raise ValueError("目标字段不能同时作为特征字段。")
-        user_config["feature_fields"] = feature_fields
-
-    @staticmethod
-    def _coerce_numeric_columns(
-        records: list[dict[str, Any]],
-    ) -> list[str]:
-        columns = sorted({
-            key for record in records for key in record
-        })
-        blocked = {
-            "sample_id", "sample_name", "project_id", "sample_type", "create_time"
-        }
-        numeric_columns: list[str] = []
-        for column in columns:
-            if column in blocked:
-                continue
-            values = [record.get(column) for record in records]
-            non_missing = [value for value in values if value is not None]
-            if not non_missing:
-                continue
-            parsed: list[Decimal | None] = []
-            for value in values:
-                if value is None:
-                    parsed.append(None)
-                    continue
-                try:
-                    candidate = Decimal(str(value).strip())
-                    parsed.append(candidate if candidate.is_finite() else None)
-                except (InvalidOperation, ValueError):
-                    parsed.append(None)
-            parsed_non_missing = [item for item in parsed if item is not None]
-            if len(parsed_non_missing) != len(non_missing):
-                continue
-            numeric_columns.append(column)
-            for record, value in zip(records, parsed):
-                if value is None:
-                    record[column] = None
-                elif value == value.to_integral_value():
-                    record[column] = int(value)
-                else:
-                    record[column] = float(value)
-        return numeric_columns
+        self.snapshot_service.apply_dataset_field_config(
+            user_config, snapshot, target_column
+        )
 
     def _flatten_samples(
         self,
         samples: Iterable[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        records: list[dict[str, Any]] = []
-        ambiguous: set[str] = set()
-        for sample_item in samples:
-            sample = dict(sample_item.get("sample") or {})
-            row: dict[str, Any] = {
-                "sample_id": sample.get("id"),
-                "sample_name": sample.get("name"),
-                "project_id": sample.get("project_id"),
-                "sample_type": sample.get("sample_type"),
-                "create_time": sample.get("create_time"),
-            }
-            for section in ("formula", "process", "performance"):
-                grouped: dict[str, list[dict[str, Any]]] = {}
-                for field in sample_item.get(section) or []:
-                    name = str(field.get("name") or field.get("raw_key") or "").strip()
-                    if name:
-                        grouped.setdefault(normalize_field_name(name), []).append(field)
-                for normalized, fields in grouped.items():
-                    display_name = str(
-                        fields[0].get("name") or fields[0].get("raw_key") or normalized
-                    )
-                    column = f"{section}.{display_name}"
-                    if len(fields) == 1:
-                        row[column] = self._scalar(fields[0].get("value"))
-                    else:
-                        ambiguous.add(f"{section}.{display_name}")
-            for name, value in dict(sample_item.get("conditions") or {}).items():
-                row[f"condition.{name}"] = self._scalar(value)
-            records.append(row)
-        warnings = (
-            [f"存在同名多条动态字段，已置为缺失：{', '.join(sorted(ambiguous))}"]
-            if ambiguous
-            else []
-        )
-        return records, warnings
+        return self.snapshot_service.flatten_samples(samples)
 
     def _model_records(self, scope: _ArtifactScope) -> list[dict[str, Any]]:
         result = self._run_tool(
@@ -824,14 +588,7 @@ class EngineWorkflowAdapter:
         scope: _ArtifactScope,
         identifier: Any,
     ) -> dict[str, Any]:
-        result = self.registry.execute(
-            "get_sample_context",
-            identifier=identifier,
-            ctx=scope.ctx,
-        )
-        if not isinstance(result, dict) or result.get("status") != "ok":
-            raise ValueError("未在当前 Company + Project 权限范围内找到待预测样品。")
-        return result
+        return self.snapshot_service.sample_context(scope, identifier)
 
     def _visualization(
         self,
@@ -877,43 +634,12 @@ class EngineWorkflowAdapter:
         model_id: Any = None,
         version: Any = None,
     ) -> dict[str, Any] | None:
-        candidates = [
-            item for item in records
-            if str(item.get("status") or "CANDIDATE").upper()
-            in self.allowed_model_statuses
-        ]
-        if model_id is not None:
-            candidates = [
-                item for item in candidates
-                if str(item.get("model_id") or "") == str(model_id)
-            ]
-        if version is not None:
-            candidates = [
-                item for item in candidates
-                if str(item.get("version") or "") == str(version)
-            ]
-        requested = normalize_field_name(target_metric)
-        requested_suffix = normalize_field_name(target_metric.rsplit(".", 1)[-1])
-        matched = [
-            item for item in candidates
-            if normalize_field_name(item.get("target_name")) == requested
-            or normalize_field_name(
-                str(item.get("target_name") or "").rsplit(".", 1)[-1]
-            ) == requested_suffix
-        ]
-        if len(matched) > 1:
-            return None
-        candidates = matched
-        if not candidates:
-            return None
-        return max(
-            enumerate(candidates),
-            key=lambda pair: (
-                str(pair[1].get("created_at") or ""),
-                self._version_number(pair[1].get("version")),
-                pair[0],
-            ),
-        )[1]
+        return self.model_selector.select(
+            records,
+            target_metric,
+            model_id=model_id,
+            version=version,
+        )
 
     def _record_for_model(
         self,
@@ -930,115 +656,32 @@ class EngineWorkflowAdapter:
         record: dict[str, Any],
         feature_names: list[str],
     ) -> dict[str, Any]:
-        aligned: dict[str, Any] = {}
-        missing: list[str] = []
-        for feature_name in feature_names:
-            if feature_name in record:
-                aligned[feature_name] = record[feature_name]
-                continue
-            requested = normalize_field_name(feature_name)
-            requested_suffix = normalize_field_name(
-                feature_name.rsplit(".", 1)[-1]
-            )
-            matches = [
-                key for key, value in record.items()
-                if value is not None
-                and (
-                    normalize_field_name(key) == requested
-                    or normalize_field_name(key.rsplit(".", 1)[-1])
-                    == requested_suffix
-                )
-            ]
-            if len(matches) == 1:
-                aligned[feature_name] = record[matches[0]]
-            else:
-                missing.append(feature_name)
-        if missing:
-            raise ValueError(f"模型输入缺少字段：{', '.join(missing)}")
-        return aligned
+        return self.model_selector.align_record(record, feature_names)
 
     def _observed_targets(
         self,
         row: dict[str, Any],
         target_names: list[str],
     ) -> dict[str, float] | None:
-        observed: dict[str, float] = {}
-        for target_name in target_names:
-            value = row.get(target_name)
-            if value is None:
-                return None
-            try:
-                parsed = Decimal(str(value).strip())
-            except (InvalidOperation, ValueError):
-                return None
-            if not parsed.is_finite():
-                return None
-            observed[target_name] = float(parsed)
-        return observed
+        return self.model_selector.observed_targets(row, target_names)
 
     def _map_variables(
         self,
         variables: Any,
         feature_names: list[str],
     ) -> list[dict[str, Any]]:
-        if variables is None:
-            return []
-        if not isinstance(variables, list):
-            raise ValueError("variables 必须是 JSON 对象数组。")
-        mapped = []
-        for item in variables:
-            if not isinstance(item, dict):
-                raise ValueError("每个变量必须是 JSON 对象。")
-            copied = dict(item)
-            copied["name"] = self._resolve_feature_name(
-                copied.get("name"), feature_names
-            )
-            mapped.append(copied)
-        return mapped
+        return self.model_selector.map_variables(variables, feature_names)
 
     def _map_constraints(
         self,
         constraints: Any,
         feature_names: list[str],
     ) -> list[dict[str, Any]]:
-        if constraints is None:
-            return []
-        if not isinstance(constraints, list):
-            raise ValueError("约束必须是 JSON 对象数组。")
-        mapped = []
-        for item in constraints:
-            if not isinstance(item, dict):
-                raise ValueError("每条约束必须是 JSON 对象。")
-            copied = dict(item)
-            variables = [
-                self._resolve_feature_name(name, feature_names)
-                for name in copied.get("variables") or []
-            ]
-            if variables:
-                copied["variables"] = variables
-            mapped.append(copied)
-        return mapped
+        return self.model_selector.map_constraints(constraints, feature_names)
 
     @staticmethod
     def _resolve_feature_name(name: Any, feature_names: list[str]) -> str:
-        requested = str(name or "").strip()
-        if not requested:
-            raise ValueError("变量名不能为空。")
-        if requested in feature_names:
-            return requested
-        requested_normalized = normalize_field_name(requested)
-        requested_suffix = normalize_field_name(requested.rsplit(".", 1)[-1])
-        matches = [
-            feature_name for feature_name in feature_names
-            if normalize_field_name(feature_name) == requested_normalized
-            or normalize_field_name(feature_name.rsplit(".", 1)[-1])
-            == requested_suffix
-        ]
-        if len(matches) == 1:
-            return matches[0]
-        if not matches:
-            raise ValueError(f"变量 {requested} 未用于当前模型。")
-        raise ValueError(f"变量 {requested} 匹配到多个模型字段，请明确字段区段。")
+        return EngineModelSelector.resolve_feature_name(name, feature_names)
 
     def _success(
         self,
@@ -1049,22 +692,9 @@ class EngineWorkflowAdapter:
         answer: str,
         warnings: list[Any] | None = None,
     ) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
-            "workflow": intent,
-            "status": "OK",
-            "scope": self._public_scope(scope),
-            "steps": [{"name": name, "status": "COMPLETED"} for name in steps],
-            "result": result,
-            "answer": answer,
-            "evidence": [{
-                "source": "engine_workflow",
-                "company_id": scope.company_id,
-                "project_id": scope.project_id,
-                "artifact_root": str(scope.project_root),
-            }],
-            "warnings": list(warnings or []),
-        }
+        return self.result_builder.success(
+            scope, intent, result, steps, answer, warnings
+        )
 
     def _blocked(
         self,
@@ -1074,21 +704,9 @@ class EngineWorkflowAdapter:
         answer: str,
         warnings: list[Any] | None = None,
     ) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
-            "workflow": intent,
-            "status": "BLOCKED",
-            "scope": self._public_scope(scope),
-            "steps": [{"name": "modeling_gate", "status": "BLOCKED"}],
-            "result": result,
-            "answer": answer,
-            "evidence": [{
-                "source": "engine_modeling_gate",
-                "company_id": scope.company_id,
-                "project_id": scope.project_id,
-            }],
-            "warnings": list(warnings or []),
-        }
+        return self.result_builder.blocked(
+            scope, intent, result, answer, warnings
+        )
 
     def _model_required(
         self,
@@ -1096,27 +714,7 @@ class EngineWorkflowAdapter:
         target_metric: str,
         records: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
-            "workflow": "ensure_model",
-            "status": "MODEL_REQUIRED",
-            "scope": self._public_scope(scope),
-            "steps": [{"name": "query_model_registry", "status": "COMPLETED"}],
-            "result": {
-                "target_metric": target_metric,
-                "available_model_count": len(records),
-            },
-            "answer": (
-                f"Project {scope.project_id} 当前没有可用于“{target_metric}”的已注册模型。"
-                "请先明确发起建模；本次预测或优化不会自动训练。"
-            ),
-            "evidence": [{
-                "source": "model_registry",
-                "company_id": scope.company_id,
-                "project_id": scope.project_id,
-            }],
-            "warnings": [],
-        }
+        return self.result_builder.model_required(scope, target_metric, records)
 
     def _failure(
         self,
@@ -1125,43 +723,13 @@ class EngineWorkflowAdapter:
         *,
         details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "schema_version": 1,
-            "workflow": "engine_workflow",
-            "status": "ERROR",
-            "error": {"code": str(code), "message": message},
-            "steps": [],
-            "result": {},
-            "answer": message,
-            "evidence": [],
-            "warnings": [],
-        }
-        if details is not None:
-            payload["details"] = details
-        return payload
+        return self.result_builder.failure(
+            code, message, details=details
+        )
 
     @staticmethod
     def _public_scope(scope: _ArtifactScope) -> dict[str, Any]:
-        return {
-            "company_id": scope.company_id,
-            "project_id": scope.project_id,
-            "conversation_id": scope.conversation_id,
-        }
-
-    @staticmethod
-    def _safe_token(value: Any, kind: str) -> str:
-        text = str(value or "").strip()
-        token = re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("._")[:64]
-        if not token:
-            token = kind
-        if token != text:
-            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
-            return f"{token[:52]}_{digest}"
-        return token
-
-    @staticmethod
-    def _session_token(value: str) -> str:
-        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+        return EngineResultBuilder.public_scope(scope)
 
     @staticmethod
     def _scalar(value: Any) -> Any:
@@ -1195,37 +763,3 @@ class EngineWorkflowAdapter:
         if not isinstance(value, list):
             raise ValueError("算法列表必须是字符串数组。")
         return [str(item).strip() for item in value if str(item).strip()]
-
-    @staticmethod
-    def _version_number(value: Any) -> int:
-        try:
-            return int(str(value).lstrip("vV"))
-        except (TypeError, ValueError):
-            return 0
-
-    @staticmethod
-    def _catalog_entry(
-        catalog: dict[str, Any],
-        section: str,
-        normalized: str,
-    ) -> dict[str, Any]:
-        for item in (catalog.get("sections") or {}).get(section) or []:
-            if normalize_field_name(item.get("name")) == normalized:
-                return dict(item)
-        raise ValueError("目标字段目录绑定失败。")
-
-    @staticmethod
-    def _dynamic_column(
-        section: str,
-        normalized: str,
-        catalog: dict[str, Any],
-    ) -> str:
-        sections = catalog.get("sections") or {}
-        entry = next((
-            dict(item) for item in sections.get(section) or []
-            if normalize_field_name(item.get("name")) == normalized
-        ), None)
-        if entry is None:
-            raise ValueError("目标字段目录绑定失败。")
-        name = str(entry.get("name") or normalized)
-        return f"{section}.{name}"

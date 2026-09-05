@@ -26,10 +26,27 @@ result = registry.execute(
 )
 ```
 
+The Agent `ToolRegistry` wraps the framework-neutral schema with a
+`{"payload": ...}` contract. Before dispatch it validates that wrapper, checks
+the host scope, and writes a structured audit event. Engine tools are
+`host_scoped`: callers must pass a `UserContext` already narrowed to exactly
+one project. Audit files record argument names and outcomes only, never
+business values or payloads.
+
 The raw registration remains framework-neutral. The Agent adopts the tools
 through `EngineWorkflowAdapter`, rather than exposing path-bearing payloads to
 the language model. The adapter owns permission checks, project selection,
 artifact paths, model lookup and the fixed Tool order.
+
+Internally the adapter is split into focused services:
+
+```text
+EngineScopeResolver     Company/Project/session permission and artifact scope
+EngineSnapshotService   authorized rows, field binding, units, source snapshot
+EngineModelSelector     model status/target selection and business-field mapping
+EngineResultBuilder     stable status, evidence, warning, and report envelope
+EngineWorkflowAdapter   fixed scenario orchestration and Tool dispatch
+```
 
 Public natural-language entry points are limited to:
 
