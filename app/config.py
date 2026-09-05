@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     engine_task_lease_seconds: int = 300
     engine_task_max_events: int = 200
 
+    # Tool governance transition sink. Runtime DB tables can consume the same
+    # event contract later without changing Tool callers.
+    tool_audit_enabled: bool = True
+    tool_audit_dir: str = ".runtime/tool_audit"
+    tool_audit_retries: int = 3
+
     # V0.1.2-A: current Chat temporary attachments
     chat_upload_dir: str = ".runtime/chat_uploads"
     chat_upload_max_mb: int = 25
@@ -182,6 +188,10 @@ class Settings(BaseSettings):
             raise ValueError("ENGINE_TASK_LEASE_SECONDS 必须在10到3600之间")
         if not 20 <= self.engine_task_max_events <= 1000:
             raise ValueError("ENGINE_TASK_MAX_EVENTS 必须在20到1000之间")
+        if self.tool_audit_enabled and not self.tool_audit_dir.strip():
+            raise ValueError("TOOL_AUDIT_DIR 不能为空")
+        if not 1 <= self.tool_audit_retries <= 5:
+            raise ValueError("TOOL_AUDIT_RETRIES 必须在1到5之间")
         if not 100_000 <= self.chat_ui_workflow_max_response_chars <= 10_000_000:
             raise ValueError(
                 "CHAT_UI_WORKFLOW_MAX_RESPONSE_CHARS 必须在100000到10000000之间"

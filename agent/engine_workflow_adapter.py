@@ -241,6 +241,7 @@ class EngineWorkflowAdapter:
                 "output_dir": str(scope.session_root / "datasets"),
                 "result_mode": "summary",
             },
+            scope,
         )
         gate = dict(result.get("final_gate") or {})
         artifact = dict(result.get("dataset_artifact") or {})
@@ -340,6 +341,7 @@ class EngineWorkflowAdapter:
                 "output_dir": str(scope.session_root / "datasets"),
                 "result_mode": "summary",
             },
+            scope,
         )
         gate = dict(preprocess.get("final_gate") or {})
         artifact = dict(preprocess.get("dataset_artifact") or {})
@@ -369,6 +371,7 @@ class EngineWorkflowAdapter:
                 "model_registry_path": str(scope.model_registry_path),
                 "result_mode": "summary",
             },
+            scope,
         )
         training_run = dict(result.get("training_run") or {})
         models = list(training_run.get("model_artifacts") or [])
@@ -438,6 +441,7 @@ class EngineWorkflowAdapter:
                 "inputs": inputs,
                 "result_mode": "summary",
             },
+            scope,
         )
         model = dict(result.get("model") or {})
         preview = list(result.get("prediction_preview") or [])
@@ -589,6 +593,7 @@ class EngineWorkflowAdapter:
                 "output_dir": str(scope.session_root / "optimizations"),
                 "result_mode": "summary",
             },
+            scope,
         )
         visualization = self._visualization(scope, result)
         if visualization is not None:
@@ -810,6 +815,7 @@ class EngineWorkflowAdapter:
                 "dataset_roots": [],
                 "model_registry_paths": [str(scope.model_registry_path)],
             },
+            scope,
         )
         return [dict(item) for item in result.get("models") or []]
 
@@ -839,11 +845,21 @@ class EngineWorkflowAdapter:
         chart = self._run_tool(
             "get_chart_data",
             {"input_uri": source, "source_kind": "optimization"},
+            scope,
         )
         return dict(chart.get("result") or chart)
 
-    def _run_tool(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        result = self.registry.execute(name, payload=payload)
+    def _run_tool(
+        self,
+        name: str,
+        payload: dict[str, Any],
+        scope: _ArtifactScope | None = None,
+    ) -> dict[str, Any]:
+        result = self.registry.execute(
+            name,
+            payload=payload,
+            ctx=scope.ctx if scope is not None else None,
+        )
         if not isinstance(result, dict) or result.get("status") != "OK":
             raise EngineWorkflowToolError(
                 result if isinstance(result, dict) else {"error": {

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent.engine_tool_registration import register_engine_tools
 from agent.tool_registry import ToolRegistry
+from schemas.user_context import UserContext
 
 
 class EngineToolRegistryTests(unittest.TestCase):
@@ -28,6 +29,12 @@ class EngineToolRegistryTests(unittest.TestCase):
 
             result = registry.execute(
                 "list_artifacts",
+                ctx=UserContext(
+                    user_id="user-1",
+                    company_id="company_a",
+                    project_ids=(1,),
+                    permission_source="test",
+                ),
                 payload={
                     "dataset_roots": [str(root / "missing-datasets")],
                     "model_registry_paths": [

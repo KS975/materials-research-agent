@@ -6,6 +6,7 @@ from functools import lru_cache
 from agent.core import AgentCore
 from agent.engine_tool_registration import register_engine_tools
 from agent.engine_workflow_adapter import EngineWorkflowAdapter
+from agent.material_tool_registration import register_material_tools
 from agent.service import MaterialsAgentService
 from agent.scenario_composer import ScenarioWorkflowComposer
 from agent.tool_registry import ToolRegistry
@@ -29,6 +30,7 @@ from runtime.chat_attachments import ChatAttachmentStore
 from runtime.chat_ui_workflow import ChatUIWorkflowStore
 from runtime.chat_history import ChatHistoryStore
 from runtime.engine_tasks import EngineTaskManager, EngineTaskStore
+from runtime.tool_audit import JsonlToolAuditStore
 from skills.current_attachment import CurrentAttachmentSkill
 from skills.database_explorer import DatabaseExplorerSkill
 from skills.general_conversation import GeneralConversationFallbackSkill
@@ -63,27 +65,18 @@ class ApplicationContainer:
             resolver=self.resolver,
         )
 
-        self.registry = ToolRegistry()
-        self.registry.register(
-            "get_sample_context",
-            "读取样品完整研发上下文：项目、配方、工艺、性能、测试条件和可选实验记录",
-            self.tools.get_sample_context,
+        self.tool_audit_store = JsonlToolAuditStore(
+            settings.tool_audit_dir,
+            retries=settings.tool_audit_retries,
         )
-        self.registry.register("get_formula", "读取样品配方", self.tools.get_formula)
-        self.registry.register("get_process", "读取样品工艺", self.tools.get_process)
-        self.registry.register("get_performance", "读取样品性能及测试条件", self.tools.get_performance)
-        self.registry.register("compare_samples", "比较两个样品的配方、工艺、性能和测试条件", self.tools.compare_samples)
-        self.registry.register("find_samples", "在当前公司/项目权限范围内查找样品", self.tools.find_samples)
-        self.registry.register(
-            "list_samples_for_analysis",
-            "按授权项目和样品名范围读取有界样品集合，供确定性排序、系列和质量分析",
-            self.tools.list_samples_for_analysis,
+        self.registry = ToolRegistry(
+            audit_sink=(
+                self.tool_audit_store.record
+                if settings.tool_audit_enabled
+                else None
+            )
         )
-        self.registry.register(
-            "get_material_field_catalog",
-            "读取当前公司/项目授权范围内实际出现的材料字段名称、类别和单位；不返回字段值",
-            self.tools.get_material_field_catalog,
-        )
+        register_material_tools(self.registry, self.tools)
         register_engine_tools(self.registry)
         self.engine_workflow_adapter = EngineWorkflowAdapter(
             self.registry,
