@@ -4,11 +4,14 @@ import {isSameOriginAgentApi,platformRequestHeaders} from "./platformIdentity";
 // these X-* headers are removed from production builds. In production the
 // bridge reuses MatCloud's same-origin login state and only attaches it to the
 // fixed /agent-api/ prefix. The token is never returned, rendered or logged.
-const LOCAL_DEV_HEADERS=import.meta.env.DEV?{
-  "X-User-Id":import.meta.env.VITE_DEV_USER_ID||"local-test",
-  "X-Company-Id":import.meta.env.VITE_DEV_COMPANY_ID||"6a4b19f62d0e000027001eb8",
-  "X-Project-Ids":import.meta.env.VITE_DEV_PROJECT_IDS||"*",
+const localDevIdentity=import.meta.env.DEV?{
+  "X-User-Id":import.meta.env.VITE_DEV_USER_ID||"",
+  "X-Company-Id":import.meta.env.VITE_DEV_COMPANY_ID||"",
+  "X-Project-Ids":import.meta.env.VITE_DEV_PROJECT_IDS||"",
 }:{};
+const LOCAL_DEV_HEADERS=Object.fromEntries(
+  Object.entries(localDevIdentity).filter(([,value])=>String(value).trim())
+);
 
 export function apiFetch(url,options={}){
   const platformHeaders=!import.meta.env.DEV&&isSameOriginAgentApi(url)

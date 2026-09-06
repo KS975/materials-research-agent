@@ -77,6 +77,7 @@ Agent Runtime
 3. 新增 `GET /api/v1/health/business-db`，只返回 `configured`、`connected`、`database`、`session_read_only`、`error_class`，不返回主机、账号、密码、SQL 或连接串。
 4. 为引擎快照增加内部演示验收：必须来自 `business_mysql` 授权项目，可断言样品数、字段目录、扫描完整性和只读状态。
 5. 未配置真实库时集成测试跳过，不得用本地数据伪装真实库；离线单测继续保留。
+6. 测试期前端身份只允许来自本地 `frontend/.env.local` 的 `VITE_DEV_USER_ID / VITE_DEV_COMPANY_ID / VITE_DEV_PROJECT_IDS`；源码不得硬编码公司、用户或项目范围。
 
 验收：
 
@@ -86,6 +87,8 @@ session_read_only = true
 授权项目可生成 Engine Source Snapshot
 快照血缘包含 business_mysql / company / project / hash
 无数据库凭据泄露
+前端无硬编码授权范围
+EXP-128 授权公司上下文可查询
 ```
 
 ### 5.2 前端 Engine Workflow 适配
@@ -219,6 +222,14 @@ EXPERIMENTAL
 2. 建立优化基准集、回归测试、切换审批和版本记录。
 3. 增加 Dataset / Model / Experiment 管理页、任务历史、模型治理审批、审计查询。
 
+### 6.5 真实登录权限接入
+
+1. 前端部署在同源单位平台内，禁止携带开发 `X-User-Id / X-Company-Id / X-Project-Ids`。
+2. 后端切换 `PERMISSION_MODE=platform`，只信任已鉴权网关转发的 Authorization、company-id、organization-id、organization-level。
+3. Permission Adapter 根据登录态解析稳定用户 ID、公司 ID 和项目范围；项目映射规则必须来自平台权限服务或明确配置，不由 LLM 或前端推断。
+4. 所有 MySQL Repository、Engine Scope、Task、附件、知识索引和审计继续强制公司/项目过滤。
+5. 使用真实登录用户完成跨公司隔离、越权访问和 `EXP-128` 所属数据集回归验收。
+
 ## 7. 第三阶段：企业交付版本
 
 部署架构：
@@ -237,7 +248,7 @@ React Static Build
 企业能力：
 
 1. 多公司、多项目、多角色权限。
-2. Tool 级和数据行级权限。
+2. Tool 级和数据行级权限，且权限来源只能是可信登录态或权限服务。
 3. 审计落库和查询。
 4. 高风险动作审批。
 5. 配置中心与密钥管理。
@@ -252,7 +263,7 @@ React Static Build
 | 阶段切换 | 门槛 |
 |---|---|
 | 内部演示 → 试点 | 真实只读库、前端引擎适配、异步任务、图表和最终报告链路验收 |
-| 试点 → 企业 | Registry、模型治理、实验回流、engine 默认路由和审计持久化验收 |
+| 试点 → 企业 | Registry、模型治理、实验回流、engine 默认路由、真实登录权限和审计持久化验收 |
 | 企业发布 | 部署、安全、监控、备份、多角色验收完成 |
 
 | 风险 | 处理 |
@@ -271,8 +282,8 @@ React Static Build
 | 差距根因、架构迁移、分阶段方案是否合并 | 已合并，主线唯一 |
 | 前端引擎适配是否在第一阶段 | 已在第一阶段 |
 | 真实只读数据库是否在内部演示阶段 | 已在第一阶段 |
+| 真实登录权限是否纳入阶段路径 | 已纳入试点期，企业期完成多角色治理 |
 | 是否与 V0.2 架构冲突 | 无冲突，采用过渡实现向 Registry / Worker / Runtime DB 演进 |
 | 是否重复引擎专项方案 | 无重复，本文只管平台集成 |
 | 是否满足执行过程报告约束 | 执行中仅结构化状态和图表，终态完整报告 |
 | 是否扩大当前范围 | 未扩大企业期功能，实验回流留在试点期 |
-
