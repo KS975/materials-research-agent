@@ -66,6 +66,15 @@ export async function health(){
   return r.json();
 }
 
+export async function getBusinessDbHealth(){
+  const r=await apiFetch("/agent-api/api/v1/health/business-db",{
+    headers:{"Accept":"application/json"},
+  });
+  const data=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error(data?.detail||`业务库健康检查失败 HTTP ${r.status}`);
+  return data;
+}
+
 export async function uploadChatFile(file, scope){
   const form = new FormData();
   form.append("file", file);
@@ -308,6 +317,37 @@ export async function getModelingStatus(projectId, targetMetric, scope){
   const data=await r.json().catch(()=>null);
   if(!r.ok) throw new Error(data?.detail||`建模状态读取失败 HTTP ${r.status}`);
   return data;
+}
+
+async function engineTaskRequest(path,method="GET",body){
+  const r=await apiFetch(`/agent-api/api/v1/engine-tasks${path}`,{
+    method,
+    headers:body?{"Content-Type":"application/json"}:undefined,
+    body:body?JSON.stringify(body):undefined,
+  });
+  const data=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error(data?.detail||`引擎任务请求失败 HTTP ${r.status}`);
+  return data;
+}
+
+export function createEngineTask(payload,scope){
+  return engineTaskRequest("","POST",payload);
+}
+
+export function getEngineTask(taskId,scope){
+  return engineTaskRequest(`/${encodeURIComponent(taskId)}`);
+}
+
+export function cancelEngineTask(taskId,scope){
+  return engineTaskRequest(`/${encodeURIComponent(taskId)}/cancel`,"POST",{});
+}
+
+export function approveEngineTask(taskId,reason="",scope){
+  return engineTaskRequest(`/${encodeURIComponent(taskId)}/approve`,"POST",{reason});
+}
+
+export function resumeEngineTask(taskId,scope){
+  return engineTaskRequest(`/${encodeURIComponent(taskId)}/resume`,"POST",{});
 }
 
 export async function getChatHistory(scope,{limit=50,offset=0}={}){

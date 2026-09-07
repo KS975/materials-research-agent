@@ -30,6 +30,8 @@ from runtime.chat_ui_workflow import (
     ChatUIWorkflowNotFoundError,
     ChatUIWorkflowPermissionError,
 )
+from runtime.engine_tasks import EngineTaskRequest
+from runtime.optimization_shadow import compare_optimization_routes, shadow_failure
 from runtime.chat_history import (
     ChatHistoryError,
     ChatHistoryNotFoundError,
@@ -640,7 +642,7 @@ def _classify_chat_ui_primary_family(state: dict[str, Any]) -> dict[str, Any]:
     )
     engine_route_active = bool(
         getattr(container.settings, "engine_workflow_enabled", False)
-        and engine_route == "engine"
+        and engine_route in {"engine", "shadow"}
     )
     if looks_like_inverse_design(body.message) and not engine_route_active:
         return with_skill(
@@ -1317,6 +1319,58 @@ def _execute_semantic_engine_workflow(state: dict[str, Any]) -> ChatUIResponse:
     )
     if tool_name is None:
         raise HTTPException(400, "已识别引擎工作流，但没有受控入口 Tool")
+
+    if str(getattr(container.settings, "engine_task_mode", "sync")) == "async":
+        request = EngineTaskRequest(
+            intent=intent,
+            tool_name=tool_name,
+            tool_args=dict(tool_args),
+            conversation_id=str(body.conversation_id or ""),
+        )
+        try:
+            task = container.engine_task_manager.submit(ctx=ctx, request=request)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Engine Task 创建失败：{type(exc).__name__}: {exc}",
+            ) from exc
+        emit_progress(
+            "engine_task_created",
+            "completed",
+            "异步引擎任务已创建",
+            "任务已进入受控 Worker 队列，前端将通过任务接口持续读取状态。",
+            engine_task_id=task.get("task_id"),
+            task_status=task.get("status"),
+            intent=intent,
+        )
+        return ChatUIResponse(
+            answer=(
+                "已创建异步引擎任务，执行过程将展示状态和阶段数据；"
+                "任务完成后展示完整报告。"
+            ),
+            intent=intent,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            data={
+                "schema_version": 1,
+                "kind": "engine_task_created",
+                "task": task,
+            },
+            evidence=[],
+            warnings=[],
+            router="engine_task_async",
+            reasoning_summary=(
+                summary
+                or "DeepSeek 只提取参数；引擎任务由后端 Worker、检查点和权限体系执行。"
+            ),
+            routing=routing_meta,
+            conversation_id=body.conversation_id,
+        )
+
     execution_args = {
         **dict(tool_args),
         "_workflow_id": str(state.get("workflow_id") or ""),
@@ -1330,6 +1384,19 @@ def _execute_semantic_engine_workflow(state: dict[str, Any]) -> ChatUIResponse:
             ctx,
         )
         answer = container.core.answer(body.message, intent, result)
+
+        if (
+            str(getattr(container.settings, "engine_task_mode", "sync")) == "sync"
+            and str(getattr(container.settings, "engine_optimization_route", "legacy")) == "shadow"
+            and intent in {"optimize_formula", "recommend_next_experiments"}
+        ):
+            result = {
+                **result,
+                "optimization_shadow": _run_legacy_optimization_for_shadow(
+                    body, ctx, intent, tool_args, result
+                ),
+            }
+            answer = result.get("answer") or answer
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
@@ -1352,6 +1419,43 @@ def _execute_semantic_engine_workflow(state: dict[str, Any]) -> ChatUIResponse:
         ),
         routing=routing_meta,
     )
+
+
+def _run_legacy_optimization_for_shadow(
+    body: ChatUIRequest,
+    ctx: UserContext,
+    intent: str,
+    tool_args: dict[str, Any],
+    engine_result: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        project_id = int(dict(tool_args or {}).get("project_id", 0))
+    except (TypeError, ValueError):
+        project_id = 0
+    if not project_id and not ctx.all_projects and len(ctx.project_ids) == 1:
+        project_id = int(ctx.project_ids[0])
+    if not project_id:
+        return shadow_failure(ValueError("shadow 对比需要明确 Project"))
+
+    try:
+        if intent == "optimize_formula":
+            legacy = run_inverse_design_for_ui(
+                runtime_root=_v014_runtime_root(),
+                project_id=project_id,
+                message=body.message,
+            )
+        else:
+            root = _v014_runtime_root()
+            target_metric = infer_bo_target_metric(body.message, root, project_id)
+            legacy = run_next_experiments_for_ui(
+                runtime_root=root,
+                project_id=project_id,
+                target_metric=target_metric,
+                batch_size=infer_batch_size(body.message, 5),
+            )
+        return compare_optimization_routes(legacy, engine_result)
+    except Exception as exc:
+        return shadow_failure(exc)
 
 
 def _execute_chat_ui_legacy(

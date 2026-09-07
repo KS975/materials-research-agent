@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     engine_task_checkpoint_retries: int = 3
     engine_task_lease_seconds: int = 300
     engine_task_max_events: int = 200
+    engine_task_mode: Literal["sync", "async"] = "sync"
 
     # Tool governance transition sink. Runtime DB tables can consume the same
     # event contract later without changing Tool callers.
@@ -188,6 +189,8 @@ class Settings(BaseSettings):
             raise ValueError("ENGINE_TASK_LEASE_SECONDS 必须在10到3600之间")
         if not 20 <= self.engine_task_max_events <= 1000:
             raise ValueError("ENGINE_TASK_MAX_EVENTS 必须在20到1000之间")
+        if self.engine_task_mode not in {"sync", "async"}:
+            raise ValueError("ENGINE_TASK_MODE 仅支持 sync 或 async")
         if self.tool_audit_enabled and not self.tool_audit_dir.strip():
             raise ValueError("TOOL_AUDIT_DIR 不能为空")
         if not 1 <= self.tool_audit_retries <= 5:

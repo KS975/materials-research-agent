@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  approveEngineTask,
+  cancelEngineTask,
   chatWithProgress,
   deleteChatFile,
   deleteChatConversation,
   getChatConversation,
   getChatHistory,
+  getEngineTask,
   getModelingStatus,
   getPlatformSession,
   health,
   renameChatConversation,
+  resumeEngineTask,
   uploadChatFile,
 } from "./api";
 import {
@@ -25,6 +29,8 @@ import { createInitialAnalysisStep, mergeProgressStep } from "./progress";
 import DatabaseNavigator from "./DatabaseNavigator";
 import ChatHistoryPanel from "./ChatHistoryPanel";
 import MarkdownView, { CopyControl } from "./MarkdownView";
+import {EngineTaskCard,EngineWorkflowCard} from "./EngineWorkflowCards";
+import {engineTaskIsTerminal} from "./engineWorkflow";
 
 const quick=[
   {label:"单位真实数据",text:"查看单位真实数据概况",type:"chat"},
@@ -752,7 +758,7 @@ function AnalysisProgress({steps=[],live=false}){
   </div>
 }
 
-function Message({m,scope}){
+function Message({m,scope,onEngineTaskAction}){
   const isV020Feedback=m.data?.kind==="v020_feedback_loop";
   const isV030Autonomy=m.data?.kind==="v030_autonomy";
   const showAnswerActions=m.role==="assistant"&&!m.pending&&Boolean(m.content);
@@ -760,7 +766,7 @@ function Message({m,scope}){
     <div className="avatar">{m.role==="assistant"?<Logo/>:"你"}</div>
     <div className="msgcol">
       <small>{m.role==="assistant"?"材数智能体":"你"}</small>
-      <div className="bubble">{(m.pending||m.progress?.length>0)&&<AnalysisProgress steps={m.progress||[]} live={!!m.pending}/>} {!isV020Feedback&&!isV030Autonomy&&m.content&&<div className="content">{m.role==="assistant"?<MarkdownView content={m.content}/>:m.content}</div>}<ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/>{showAnswerActions&&<div className="answerActions"><CopyControl value={m.content} label="复制答案"/></div>}<Detail m={m}/></div>
+      <div className="bubble">{(m.pending||m.progress?.length>0)&&<AnalysisProgress steps={m.progress||[]} live={!!m.pending}/>}<EngineTaskCard task={m.engineTask} disabled={!onEngineTaskAction} onAction={action=>onEngineTaskAction?.(m.id,m.engineTask?.task_id,action)}/> {!isV020Feedback&&!isV030Autonomy&&m.content&&<div className="content">{m.role==="assistant"?<MarkdownView content={m.content}/>:m.content}</div>}<EngineWorkflowCard data={m.data}/><ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/>{showAnswerActions&&<div className="answerActions"><CopyControl value={m.content} label="复制答案"/></div>}<Detail m={m}/></div>
     </div>
   </div>
 }
@@ -796,6 +802,7 @@ export default function App(){
   const end=useRef(null);
   const fileInput=useRef(null);
   const composerInput=useRef(null);
+  const pollingEngineTasks=useRef(new Set());
 
   useEffect(()=>{
     health().then(()=>setOnline(true)).catch(()=>setOnline(false));
@@ -970,6 +977,76 @@ export default function App(){
     }catch(e){appendUiFailure("周一演示模式",e)}finally{setBusy(false)}
   }
 
+  function updateEngineTaskMessage(messageId,updater){
+    setMessages(items=>items.map(item=>item.id===messageId?updater(item):item));
+  }
+
+  async function pollEngineTask(messageId,taskId){
+    if(!taskId||pollingEngineTasks.current.has(taskId))return;
+    pollingEngineTasks.current.add(taskId);
+    let pollingErrors=0;
+    try{
+      while(true){
+        await new Promise(resolve=>setTimeout(resolve,1200));
+        let status;
+        try{
+          status=await getEngineTask(taskId,scope);
+          pollingErrors=0;
+        }catch(error){
+          pollingErrors+=1;
+          if(pollingErrors>=3){
+            updateEngineTaskMessage(messageId,item=>({
+              ...item,
+              pending:false,
+              engineTask:{
+                ...item.engineTask,
+                status:"FAILED",
+                error:{type:"TaskPollingError",message:String(error?.message||error)},
+              },
+              data:{kind:"engine_task_error",task:item.engineTask},
+            }));
+            return;
+          }
+          continue;
+        }
+        const terminal=engineTaskIsTerminal(status.status);
+        updateEngineTaskMessage(messageId,item=>({
+          ...item,
+          engineTask:status,
+          pending:!terminal,
+          content:status.status==="SUCCEEDED"?(status.answer||status.result?.answer||item.content):item.content,
+          data:status.status==="SUCCEEDED"?(status.result||status):(terminal?{kind:"engine_task_error",task:status}:item.data),
+          meta:terminal?{
+            intent:status.intent,
+            tool:status.tool_name,
+            router:"engine_task_worker",
+            summary:"异步 Engine Task 已到达终态。",
+          }:item.meta,
+          evidence:status.status==="SUCCEEDED"?(status.result?.evidence||item.evidence):item.evidence,
+        }));
+        if(terminal)return;
+      }
+    }finally{
+      pollingEngineTasks.current.delete(taskId);
+    }
+  }
+
+  async function handleEngineTaskAction(messageId,taskId,action){
+    if(!taskId)return;
+    let status;
+    if(action==="cancel")status=await cancelEngineTask(taskId,scope);
+    else if(action==="approve")status=await approveEngineTask(taskId,"前端任务审批",scope);
+    else if(action==="resume")status=await resumeEngineTask(taskId,scope);
+    else throw new Error(`未知任务动作：${action}`);
+    updateEngineTaskMessage(messageId,item=>({
+      ...item,
+      engineTask:status,
+      pending:!engineTaskIsTerminal(status.status),
+    }));
+    if(action==="resume")await pollEngineTask(messageId,taskId);
+    return status;
+  }
+
 
   async function send(value){
     const q=(value??text).trim(); if(!q||busy||uploading)return;
@@ -984,6 +1061,7 @@ export default function App(){
       {id:pendingId,role:"assistant",content:"",pending:true,progress:[createInitialAnalysisStep()]},
     ]); setBusy(true);
     try{
+      let engineTaskIdFromStream="";
       const r=await chatWithProgress(
         q,
         history,
@@ -992,13 +1070,32 @@ export default function App(){
         attachmentReferenceMode,
         conversationId,
         pendingId,
-        progress=>setMessages(items=>items.map(item=>
-          item.id===pendingId
-            ? {...item,progress:mergeProgressStep(item.progress,progress)}
-            : item
-        )),
+        progress=>{
+          if(progress?.engine_task_id)engineTaskIdFromStream=String(progress.engine_task_id);
+          setMessages(items=>items.map(item=>
+            item.id===pendingId
+              ? {...item,progress:mergeProgressStep(item.progress,progress)}
+              : item
+          ));
+        },
       );
       setConversationId(r.conversation_id||conversationId);
+      const task=r.data?.kind==="engine_task_created"
+        ?r.data.task
+        :(engineTaskIdFromStream?await getEngineTask(engineTaskIdFromStream,scope):null);
+      if(task?.task_id){
+        setMessages(items=>items.map(item=>item.id===pendingId?{
+          ...item,
+          pending:true,
+          engineTask:task,
+          meta:{intent:r.intent,tool:r.tool_name,router:r.router,summary:r.reasoning_summary},
+          data:null,
+          evidence:r.evidence||[],
+        }:item));
+        pollEngineTask(pendingId,String(task.task_id));
+        loadHistory();
+        return;
+      }
       setMessages(items=>items.map(item=>item.id===pendingId?{
         ...item,
         pending:false,
@@ -1043,7 +1140,7 @@ export default function App(){
       <header><div><h1>研发对话</h1><p>V0.3 · Autonomous Experiment Orchestration</p></div><div><button className="dbNavToggle" onClick={()=>setDashboardOpen(true)}>▣ 数据库浏览{dashboardSummary?` · ${dashboardSummary.sample_count}`:""}</button><button className="versionTopBtn active" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>V0.3 · 9036</button><button className="demoModeBtn" disabled={busy||uploading} onClick={sendDemoStatus}>演示模式</button><button className="modelStatusBtn autonomyStatusBtn" disabled={busy||uploading} onClick={()=>sendAutonomyStatus(MONDAY_DEMO_PROJECTS.autonomy)}>自主状态</button><button className="modelStatusBtn feedbackStatusBtn" disabled={busy||uploading} onClick={()=>sendFeedbackStatus(MONDAY_DEMO_PROJECTS.feedback)}>V0.2 · 9026</button><button className="modelStatusBtn" disabled={busy||uploading} onClick={()=>sendModelStatus("冲击强度",MONDAY_DEMO_PROJECTS.modeling)}>模型 · 9010</button></div></header>
       <section className="scroll"><div className="inner">
         {messages.length===1&&<div className="quick"><small>可以试试</small><div>{quick.map(q=><button key={q.text} onClick={()=>runQuick(q)}><span>{q.label}</span><b>{q.text}</b></button>)}</div></div>}
-        <div className="messages">{messages.map(m=><Message key={m.id} m={m} scope={scope}/>)}{busy&&!messages.some(m=>m.pending)&&<div className="msg assistant"><div className="avatar"><Logo/></div><div className="msgcol"><small>材数智能体</small><div className="bubble loading">● ● ● <span>正在读取研发证据 / 运行优化算法</span></div></div></div>}</div>
+        <div className="messages">{messages.map(m=><Message key={m.id} m={m} scope={scope} onEngineTaskAction={handleEngineTaskAction}/>)}{busy&&!messages.some(m=>m.pending)&&<div className="msg assistant"><div className="avatar"><Logo/></div><div className="msgcol"><small>材数智能体</small><div className="bubble loading">● ● ● <span>正在读取研发证据 / 运行优化算法</span></div></div></div>}</div>
         {err&&<div className="error"><b>请求失败</b>{err}</div>}<div ref={end}/>
       </div></section>
 

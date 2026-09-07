@@ -27,8 +27,8 @@ test("two selected samples produce explicit identifiers",()=>{
 test("project and field selections become useful questions",()=>{
   assert.equal(buildProjectPrompt({id:115}),"分析项目115的样品数据");
   assert.equal(buildProjectPrompt({id:-1539}),"分析项目-1539的样品数据");
-  assert.equal(buildFieldPrompt("formula",{name:"PC"}),"找PC含量最高的样品");
-  assert.equal(buildFieldPrompt("performance",{name:"冲击强度"}),"找冲击强度最高的样品");
+  assert.equal(buildFieldPrompt("formula",{name:"PC"}),"找配方PC最高的样品");
+  assert.equal(buildFieldPrompt("performance",{name:"冲击强度"}),"找性能冲击强度最高的样品");
 });
 
 test("negative project ids are treated as historical imports",()=>{

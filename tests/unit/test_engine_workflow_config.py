@@ -32,6 +32,10 @@ class EngineWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine_task_workers, 4)
         self.assertEqual(settings.engine_task_max_events, 100)
 
+    def test_engine_task_mode_accepts_async(self) -> None:
+        settings = Settings(_env_file=None, engine_task_mode="async")
+        self.assertEqual(settings.engine_task_mode, "async")
+
     def test_engine_task_settings_reject_invalid_ranges(self) -> None:
         for field, value in (
             ("engine_task_workers", 0),
