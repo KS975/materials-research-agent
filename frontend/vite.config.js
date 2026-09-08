@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   // Emit ./assets/... so the built dist can be hosted under /Q&A/ or any subpath.
   base: "./",
+  cacheDir: "../.runtime/vite-cache",
   plugins: [react()],
   server: {
     port: 5173,
