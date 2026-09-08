@@ -12,6 +12,7 @@ from schemas.user_context import UserContext
 
 SEMANTIC_FAMILIES = {
     "database_explorer",
+    "engine_workflow",
     "rag",
     "current_attachment",
     "general_conversation",

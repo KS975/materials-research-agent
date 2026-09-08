@@ -7,6 +7,7 @@ from contextvars import copy_context
 from typing import Any
 
 from agent.evidence_frame import EvidenceFrameBuilder
+from agent.research_scenarios import resolve_research_scenario
 from llm.base import LLMProvider
 from runtime.chat_attachments import ChatAttachmentStore
 from runtime.progress import emit_progress
@@ -58,6 +59,12 @@ class HybridResearchQASkill:
             args, ctx
         )
         query = str(args.get("history_query") or args.get("query") or message).strip()
+        research_workflow = resolve_research_scenario(message, args)
+        if research_workflow["execution_status"] != "SUPPORTED":
+            raise ValueError(
+                f"研究场景“{research_workflow['scenario_name']}”属于"
+                f"{research_workflow['execution_status']}，当前切片未开放执行"
+            )
 
         emit_progress(
             "hybrid_research_plan",
@@ -66,6 +73,8 @@ class HybridResearchQASkill:
             "将并行获取结构化事实、向量证据和当前输入，统一对齐后综合回答。",
             detail_items=[
                 {"label": "权限范围", "value": scope["display_name"]},
+                {"label": "研究 Workflow", "value": research_workflow["workflow_name"]},
+                {"label": "场景", "value": research_workflow["scenario_name"]},
                 {"label": "结构化来源", "value": "外部 MySQL 只读 Tool"},
                 {"label": "非结构化来源", "value": "向量检索 Tool"},
                 {"label": "当前输入", "value": f"{len(attachment_ids or [])} 个附件"},
@@ -75,7 +84,9 @@ class HybridResearchQASkill:
             ),
         )
 
-        strategy = self._structured_strategy(args, message)
+        strategy = self._structured_strategy(
+            args, message, research_workflow["scenario_id"]
+        )
         emit_progress(
             "mysql_evidence_recall",
             "running",
@@ -102,7 +113,7 @@ class HybridResearchQASkill:
                 vector_context.run,
                 self.registry.execute,
                 self.vector_tool_name,
-                query=query,
+                query=self._vector_query(query, args, research_workflow["scenario_id"]),
                 project_ids=project_ids,
                 all_projects=all_projects,
                 limit=self.max_vector_hits,
@@ -200,6 +211,7 @@ class HybridResearchQASkill:
             "answer": answer,
             "analysis_type": "hybrid_research_qa",
             "query": query,
+            "research_workflow": research_workflow,
             "analysis_scope": scope,
             "structured_strategy": {
                 "strategy": strategy["strategy"],
@@ -220,13 +232,19 @@ class HybridResearchQASkill:
                 "conflict_count": len(frame.conflicts),
             },
             "evidence": self._public_evidence(frame),
-            "warnings": list(dict.fromkeys(str(item) for item in warnings)),
+            "warnings": list(
+                dict.fromkeys(
+                    str(item)
+                    for item in [*warnings, research_workflow["boundary"]]
+                )
+            ),
         }
 
     def _structured_strategy(
         self,
         args: dict[str, Any],
         message: str,
+        scenario_id: int,
     ) -> dict[str, Any]:
         identifier = str(args.get("identifier") or "").strip()
         left = str(args.get("left_identifier") or "").strip()
@@ -244,6 +262,22 @@ class HybridResearchQASkill:
         if not identifier:
             found = _EXPLICIT_IDENTIFIER.findall(message)
             identifier = str(found[-1]) if len(found) == 1 else ""
+        if scenario_id == 5:
+            return {
+                "strategy": "material_usage_effect_scan",
+                "tool_name": "list_samples_for_analysis",
+                "executor": lambda ctx: self._material_usage_scan(
+                    ctx, args, substitution=False
+                ),
+            }
+        if scenario_id == 6:
+            return {
+                "strategy": "material_substitution_history_scan",
+                "tool_name": "list_samples_for_analysis",
+                "executor": lambda ctx: self._material_usage_scan(
+                    ctx, args, substitution=True
+                ),
+            }
         if identifier and wants_similarity:
             similarity_args = {
                 "identifier": identifier,
@@ -321,6 +355,146 @@ class HybridResearchQASkill:
                 ctx=ctx,
             ),
         }
+
+    def _material_usage_scan(
+        self,
+        ctx: UserContext,
+        args: dict[str, Any],
+        *,
+        substitution: bool,
+    ) -> dict[str, Any]:
+        if substitution:
+            original = str(args.get("original_material") or "").strip()
+            replacement = str(args.get("replacement_material") or "").strip()
+            if not original or not replacement:
+                raise ValueError(
+                    "原料替代历史检索需要 original_material 和 replacement_material"
+                )
+        else:
+            material_name = str(
+                args.get("material_name") or args.get("keyword") or ""
+            ).strip()
+            if not material_name:
+                raise ValueError("原料使用效果查询缺少 material_name")
+        source = self.registry.execute(
+            "list_samples_for_analysis",
+            keyword="",
+            limit=100,
+            ctx=ctx,
+        )
+        if not substitution:
+            matches = self._samples_using_material(source, material_name)
+            return {
+                "status": "ok",
+                "analysis_type": "material_usage_effect",
+                "material_name": material_name,
+                "count": len(matches),
+                "matched_samples": matches,
+                "scan_scope": {
+                    "sample_count": source.get("count"),
+                    "total_matches": source.get("total_matches"),
+                    "scan_complete": source.get("scan_complete"),
+                },
+                "evidence": [
+                    {"source": "eln_sample", "record_id": item["sample"]["id"]}
+                    for item in matches
+                ],
+                "warnings": [
+                    *list(source.get("warnings") or []),
+                    "原料命中基于授权样品的配方字段名称或原始键，不代表供应商或牌号完全相同。",
+                ],
+            }
+
+        original_rows = {
+            str(item["sample"]["id"]): item
+            for item in self._samples_using_material(source, original)
+        }
+        replacement_rows = {
+            str(item["sample"]["id"]): item
+            for item in self._samples_using_material(source, replacement)
+        }
+        both_ids = sorted(set(original_rows) & set(replacement_rows), key=int)
+        records = []
+        for sample_id in both_ids:
+            records.append({
+                "sample": original_rows[sample_id]["sample"],
+                "original": original_rows[sample_id]["matched_fields"],
+                "replacement": replacement_rows[sample_id]["matched_fields"],
+                "performance": original_rows[sample_id].get("performance"),
+                "interpretation": "CO_OCCURRENCE_ONLY",
+            })
+        return {
+            "status": "ok",
+            "analysis_type": "material_substitution_history",
+            "original_material": original,
+            "replacement_material": replacement,
+            "count": len(records),
+            "matched_samples": records,
+            "scan_scope": {
+                "sample_count": source.get("count"),
+                "total_matches": source.get("total_matches"),
+                "scan_complete": source.get("scan_complete"),
+            },
+            "evidence": [
+                {"source": "eln_sample", "record_id": int(sample_id)}
+                for sample_id in both_ids
+            ],
+            "warnings": [
+                *list(source.get("warnings") or []),
+                "同一样品同时含两种原料只能说明共存，不能自动证明发生过替代；替代结论需结合时间、项目记录和文档证据。",
+            ],
+        }
+
+    @staticmethod
+    def _samples_using_material(
+        source: dict[str, Any], material_name: str
+    ) -> list[dict[str, Any]]:
+        needle = str(material_name or "").strip().casefold()
+        if not needle:
+            return []
+        matches = []
+        for row in source.get("samples") or []:
+            fields = [
+                item
+                for item in row.get("formula") or []
+                if needle in str(item.get("name") or "").casefold()
+                or needle in str(item.get("raw_key") or "").casefold()
+            ]
+            if not fields:
+                continue
+            performance = [
+                item
+                for item in row.get("performance") or []
+                if isinstance(item.get("value"), (int, float))
+            ][:10]
+            matches.append({
+                "sample": row.get("sample") or {},
+                "matched_fields": fields,
+                "performance": performance,
+            })
+        return matches
+
+    @staticmethod
+    def _vector_query(
+        default_query: str,
+        args: dict[str, Any],
+        scenario_id: int,
+    ) -> str:
+        candidates_by_scenario = {
+            5: ("material_name", "keyword"),
+            6: ("original_material", "replacement_material"),
+            12: ("phenomenon", "keyword"),
+            13: ("competitor_name", "keyword"),
+        }
+        parts: list[str] = []
+        for key in candidates_by_scenario.get(scenario_id, ()):
+            value = str(args.get(key) or "").strip()
+            if value:
+                parts.append(value)
+        if parts:
+            suffix = {5: "使用效果", 6: "替代历史", 12: "异常失效", 13: "竞品对标"}
+            return " ".join([*parts, suffix.get(scenario_id, "")]).strip()
+        return default_query
 
     def _synthesize(self, *, message: str, frame) -> str:
         payload = frame.model_dump(mode="json")

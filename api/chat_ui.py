@@ -260,6 +260,16 @@ def _looks_like_hybrid_research(
 ) -> bool:
     """Detect explicit cross-source questions before single-source routing."""
     text = str(message or "").strip()
+    if any(
+        marker in text
+        for marker in (
+            "相似配方", "类似配方", "相似样品", "类似样品", "相似实验", "类似实验",
+            "原料使用效果", "原料替代", "失败配方", "失败实验", "异常案例",
+            "失效案例", "竞品对标", "新项目冷启动", "项目知识问答",
+            "去年做过", "为什么停用",
+        )
+    ):
+        return True
     has_non_structured = any(
         marker in text
         for marker in ("历史", "报告", "资料", "案例", "文献", "竞品", "向量")
@@ -274,7 +284,10 @@ def _looks_like_hybrid_research(
     )
     has_retrieval = any(
         marker in text
-        for marker in ("相似", "类似", "有没有", "查找", "检索", "反查", "对标", "冷启动")
+        for marker in (
+            "相似", "类似", "有没有", "查找", "检索", "反查", "对标", "冷启动",
+            "使用效果", "替代", "替换", "失败", "异常", "失效", "项目知识",
+        )
     )
     return bool(
         has_non_structured
@@ -390,6 +403,11 @@ def _resolve_hybrid_research_args(
         "identifier",
         "left_identifier",
         "right_identifier",
+        "material_name",
+        "original_material",
+        "replacement_material",
+        "phenomenon",
+        "competitor_name",
         "filters",
         "logic",
         "keyword",

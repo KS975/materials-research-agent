@@ -21,6 +21,7 @@ from agent.multi_condition import (
     normalize_logic,
     unit_is_explicit_in_text,
 )
+from agent.research_scenarios import looks_like_hybrid_research_request
 from agent.router import IntentDecision, RuleIntentRouter
 from llm.base import LLMProvider
 
@@ -466,6 +467,7 @@ class DeepSeekIntentRouter:
 - hybrid_research_qa，tool_name=null。
 - 用于需要同时综合外部 MySQL、向量知识库、当前附件或对话约束的开放研究问题；例如相似配方、失败案例、竞品对标、新项目冷启动、项目知识问答。
 - 可提取 identifier、left_identifier/right_identifier、filters、keyword、project_id、history_query；信息不足时不要编造。
+- 场景槽位：原料使用效果提取 material_name；原料替代提取 original_material/replacement_material；异常失效提取 phenomenon；竞品对标提取 competitor_name。用户没有明确给出时不要编造。
 - 后端会在一个固定 Workflow 中并行召回并统一 EvidenceFrame；不得拆成“数据库回答 + RAG回答”。
 
 6) Database Explorer 兜底：
@@ -601,10 +603,14 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
             forced_history_intent = hints.active_history_task
         elif hints.current_history_request:
             current_samples = list(hints.current_sample_identifiers)
-            if len(current_samples) == 1:
+            if (
+                not looks_like_hybrid_research_request(message)
+                and len(current_samples) == 1
+            ):
                 forced_history_intent = "sample_historical_similarity"
             elif (
-                not current_samples
+                not looks_like_hybrid_research_request(message)
+                and not current_samples
                 and hints.current_history_referential
                 and hints.active_sample_identifier
             ):
@@ -622,7 +628,11 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
             specialized = self._deterministic_material_intent(message, hints)
             if specialized:
                 intent = specialized
-                tool_name = _EXPECTED_TOOL_BY_INTENT[intent]
+                tool_name = (
+                    None
+                    if intent == "hybrid_research_qa"
+                    else _EXPECTED_TOOL_BY_INTENT[intent]
+                )
 
         args = data.get("tool_args") or data.get("arguments") or {}
         if not isinstance(args, dict):
@@ -874,6 +884,8 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
         user request for formula/process differences or comparability.
         """
         text = str(message or "").strip()
+        if looks_like_hybrid_research_request(text):
+            return "hybrid_research_qa"
         samples = list(hints.current_sample_identifiers)
         if (
             not samples
@@ -1424,6 +1436,11 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
                 "identifier",
                 "left_identifier",
                 "right_identifier",
+                "material_name",
+                "original_material",
+                "replacement_material",
+                "phenomenon",
+                "competitor_name",
                 "filters",
                 "logic",
                 "keyword",
