@@ -229,10 +229,41 @@ class HybridResearchQASkill:
         left = str(args.get("left_identifier") or "").strip()
         right = str(args.get("right_identifier") or "").strip()
         filters = args.get("filters")
+        similarity_scope = str(args.get("similarity_scope") or "").strip()
+        wants_similarity = (
+            bool(similarity_scope)
+            or any(
+                marker in message
+                for marker in ("相似配方", "类似配方", "相似样品", "类似样品", "相似实验", "类似实验")
+            )
+        )
 
         if not identifier:
             found = _EXPLICIT_IDENTIFIER.findall(message)
             identifier = str(found[-1]) if len(found) == 1 else ""
+        if identifier and wants_similarity:
+            similarity_args = {
+                "identifier": identifier,
+                "similarity_scope": similarity_scope or (
+                    "formula"
+                    if any(marker in message for marker in ("配方", "原料", "组分"))
+                    else "process"
+                    if any(marker in message for marker in ("工艺", "流程", "加工"))
+                    else "combined"
+                ),
+                "top_n": int(args.get("top_n") or 5),
+                "keyword": str(args.get("keyword") or ""),
+            }
+            return {
+                "strategy": "structured_similarity",
+                "tool_name": "list_samples_for_analysis",
+                "executor": lambda ctx: self.material_intelligence.execute_intent(
+                    "similar_samples",
+                    "list_samples_for_analysis",
+                    similarity_args,
+                    ctx,
+                ),
+            }
         if identifier:
             return {
                 "strategy": "explicit_sample_profile",

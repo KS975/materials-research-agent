@@ -123,3 +123,45 @@ def test_hybrid_research_degrades_vector_failure_to_structured_evidence():
     assert result["vector_result"]["status"] == "vector_unavailable"
     assert result["evidence_frame"]["source_summary"].get("vector_api", 0) == 0
     assert any("向量证据源不可用" in item for item in result["warnings"])
+
+
+def test_hybrid_research_reuses_structured_similarity_workflow():
+    calls = []
+
+    def execute_intent(intent, tool_name, args, ctx):
+        calls.append((intent, tool_name, dict(args)))
+        return {
+            "status": "ok",
+            "ranking": [],
+            "warnings": [],
+        }
+
+    registry = FakeRegistry()
+    skill = HybridResearchQASkill(
+        registry=registry,
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=execute_intent),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    result = skill.answer(
+        message="查找与 EXP-128 相似的配方和历史案例。",
+        tool_args={
+            "project_id": 115,
+            "identifier": "EXP-128",
+            "similarity_scope": "formula",
+            "top_n": 5,
+        },
+        ctx=_ctx(),
+    )
+
+    assert result["structured_strategy"] == {
+        "strategy": "structured_similarity",
+        "tool_name": "list_samples_for_analysis",
+    }
+    assert calls[0][:2] == (
+        "similar_samples",
+        "list_samples_for_analysis",
+    )
+    assert calls[0][2]["similarity_scope"] == "formula"
+    # The vector tool is still recalled through the governed registry.
+    assert registry.calls[-1][0] == "search_vector_knowledge"

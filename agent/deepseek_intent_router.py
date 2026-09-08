@@ -1427,6 +1427,8 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
                 "filters",
                 "logic",
                 "keyword",
+                "similarity_scope",
+                "top_n",
                 "result_limit",
                 "project_id",
                 "history_query",

@@ -272,10 +272,14 @@ def _looks_like_hybrid_research(
         marker in text
         for marker in ("结合", "联合", "综合", "同时", "一起", "并参考", "加上")
     )
+    has_retrieval = any(
+        marker in text
+        for marker in ("相似", "类似", "有没有", "查找", "检索", "反查", "对标", "冷启动")
+    )
     return bool(
         has_non_structured
         and has_structured
-        and (has_join or bool(attachment_ids))
+        and (has_join or has_retrieval or bool(attachment_ids))
     )
 
 
@@ -389,6 +393,8 @@ def _resolve_hybrid_research_args(
         "filters",
         "logic",
         "keyword",
+        "similarity_scope",
+        "top_n",
         "result_limit",
         "history_query",
         "query",
