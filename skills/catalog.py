@@ -33,6 +33,7 @@ def _knowledge_qa() -> SkillSpec:
         "historical_similar_case",
         "sample_historical_similarity",
         "joint_mysql_knowledge_analysis",
+        "hybrid_research_qa",
     }
     database_explorer = {"database_explorer"}
     intents = frozenset({
@@ -74,6 +75,7 @@ def _knowledge_qa() -> SkillSpec:
             "find_samples",
             "compare_samples",
             "list_samples_for_analysis",
+            "search_vector_knowledge",
             "database_explorer",
             "company_real_data_runtime",
         }),
@@ -81,7 +83,10 @@ def _knowledge_qa() -> SkillSpec:
         workflow=(
             "route_evidence_source",
             "permission_scope",
-            "retrieve_mysql_or_knowledge",
+            "parallel_mysql_vector_recall",
+            "build_evidence_frame",
+            "entity_and_unit_alignment",
+            "conflict_preservation",
             "evidence_synthesis",
             "final_report",
         ),

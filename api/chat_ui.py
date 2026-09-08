@@ -112,6 +112,7 @@ _INTENT_PROGRESS_NAMES = {
     "find_samples_multi_condition": "按多个条件筛选样品",
     "similar_samples": "计算相似样品",
     "joint_mysql_knowledge_analysis": "样品对比 + 历史资料联合分析",
+    "hybrid_research_qa": "MySQL + 向量证据混合研究问答",
     "sample_historical_similarity": "当前样品 + 历史案例联合分析",
     "search_historical_knowledge": "检索历史知识库",
     "historical_similar_case": "检索相似历史案例",
@@ -253,6 +254,31 @@ def _looks_like_historical_knowledge(message: str) -> bool:
     return any(marker in message for marker in markers)
 
 
+def _looks_like_hybrid_research(
+    message: str,
+    attachment_ids: list[str] | None = None,
+) -> bool:
+    """Detect explicit cross-source questions before single-source routing."""
+    text = str(message or "").strip()
+    has_non_structured = any(
+        marker in text
+        for marker in ("历史", "报告", "资料", "案例", "文献", "竞品", "向量")
+    )
+    has_structured = any(
+        marker in text.casefold()
+        for marker in ("mysql", "数据库", "样品", "配方", "工艺", "性能", "实验", "项目")
+    )
+    has_join = any(
+        marker in text
+        for marker in ("结合", "联合", "综合", "同时", "一起", "并参考", "加上")
+    )
+    return bool(
+        has_non_structured
+        and has_structured
+        and (has_join or bool(attachment_ids))
+    )
+
+
 def _looks_like_unmatched_database_question(message: str) -> bool:
     """Conservative fail-safe used only when the JSON intent router crashes."""
     text = str(message or "").strip()
@@ -349,6 +375,32 @@ def _resolve_joint_args(
             or ""
         ).strip(),
     }
+
+
+def _resolve_hybrid_research_args(
+    tool_args: dict[str, Any],
+    ctx: UserContext,
+) -> dict[str, Any]:
+    project_id = _resolve_historical_project_id(tool_args, ctx)
+    allowed_keys = (
+        "identifier",
+        "left_identifier",
+        "right_identifier",
+        "filters",
+        "logic",
+        "keyword",
+        "result_limit",
+        "history_query",
+        "query",
+    )
+    args = {
+        key: tool_args[key]
+        for key in allowed_keys
+        if tool_args.get(key) not in (None, "", [])
+    }
+    if project_id is not None:
+        args["project_id"] = project_id
+    return args
 
 
 
@@ -605,6 +657,12 @@ def _classify_chat_ui_primary_family(state: dict[str, Any]) -> dict[str, Any]:
         )
 
     history = [{"role": x.role, "content": x.content} for x in body.history[-12:]]
+    if _looks_like_hybrid_research(body.message, body.attachment_ids):
+        return with_skill(
+            primary_family="semantic",
+            intent="hybrid_research_qa",
+            tool_name=None,
+        )
     round2a2_decision = _route_round2a2_database_intent(
         body.message,
         container.core.rule_router,
@@ -694,6 +752,7 @@ def _semantic_family_for_intent(intent: str, router_name: str = "") -> str:
     if intent in {
         "sample_historical_similarity",
         "joint_mysql_knowledge_analysis",
+        "hybrid_research_qa",
         "search_historical_knowledge",
         "historical_similar_case",
     }:
@@ -1081,7 +1140,26 @@ def _execute_semantic_rag(state: dict[str, Any]) -> ChatUIResponse:
     body, ctx, container, intent, _, tool_args, router_name, summary, routing_meta = (
         _semantic_state(state)
     )
-    if intent == "sample_historical_similarity":
+    if intent == "hybrid_research_qa":
+        args = _resolve_hybrid_research_args(tool_args, ctx)
+        try:
+            result = container.hybrid_research_qa_skill.answer(
+                message=body.message,
+                tool_args=args,
+                ctx=ctx,
+                attachment_ids=list(body.attachment_ids),
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"混合研究问答失败：{type(exc).__name__}: {exc}",
+            ) from exc
+        response_args = args
+    elif intent == "sample_historical_similarity":
         args = _resolve_sample_history_args(tool_args, ctx)
         try:
             result = container.sample_historical_similarity_skill.answer(
@@ -2125,6 +2203,37 @@ def _execute_chat_ui_legacy(
             intent=intent,
             tool_name=None,
             tool_args={},
+            data=result,
+            evidence=result.get("evidence", []),
+            warnings=result.get("warnings", []),
+            router=router_name,
+            reasoning_summary=summary,
+            routing=routing_meta,
+        )
+
+    if intent == "hybrid_research_qa":
+        args = _resolve_hybrid_research_args(tool_args, ctx)
+        try:
+            result = container.hybrid_research_qa_skill.answer(
+                message=body.message,
+                tool_args=args,
+                ctx=ctx,
+                attachment_ids=list(body.attachment_ids),
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"混合研究问答失败：{type(exc).__name__}: {exc}",
+            ) from exc
+        return ChatUIResponse(
+            answer=result.get("answer", ""),
+            intent=intent,
+            tool_name=None,
+            tool_args=args,
             data=result,
             evidence=result.get("evidence", []),
             warnings=result.get("warnings", []),

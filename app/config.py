@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     qdrant_collection: str = "materials_knowledge_v012"
     qdrant_url: str = ""
     qdrant_api_key: SecretStr = SecretStr("")
+    vector_search_provider: Literal["legacy_qdrant", "external_api"] = "legacy_qdrant"
+    external_vector_api_endpoint: str = ""
+    external_vector_api_key: SecretStr = SecretStr("")
+    external_vector_api_timeout: float = 15.0
+    external_vector_api_allow_anonymous: bool = False
 
     # V0.1.2 T06: historical RAG retrieval guardrails
     knowledge_rag_score_threshold: float = 0.42
@@ -249,6 +254,21 @@ class Settings(BaseSettings):
             missing.append("BUSINESS_DB_NAME")
         if missing:
             raise RuntimeError("缺少业务数据库配置：" + ", ".join(missing))
+
+    def require_vector_search(self) -> None:
+        if self.vector_search_provider == "legacy_qdrant":
+            self.require_knowledge()
+            return
+        missing = []
+        if not self.external_vector_api_endpoint.strip():
+            missing.append("EXTERNAL_VECTOR_API_ENDPOINT")
+        if (
+            not self.external_vector_api_key.get_secret_value()
+            and not self.external_vector_api_allow_anonymous
+        ):
+            missing.append("EXTERNAL_VECTOR_API_KEY")
+        if missing:
+            raise RuntimeError("缺少外部向量 API 配置：" + ", ".join(missing))
 
 
 @lru_cache(maxsize=1)

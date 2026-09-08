@@ -63,6 +63,7 @@ _ALLOWED_INTENTS = _ALLOWED_TOOLS | {
     "historical_similar_case",
     "sample_historical_similarity",
     "joint_mysql_knowledge_analysis",
+    "hybrid_research_qa",
     "database_explorer",
     "general_conversation",
     "unsupported_future_feature",
@@ -80,6 +81,7 @@ _SPECIAL_NO_TOOL_INTENTS = {
     "search_historical_knowledge",
     "sample_historical_similarity",
     "joint_mysql_knowledge_analysis",
+    "hybrid_research_qa",
     "database_explorer",
     "general_conversation",
     "unsupported_future_feature",
@@ -139,6 +141,10 @@ _INTENT_ALIASES = {
     "joint_sample_history": "sample_historical_similarity",
     "joint_analysis": "joint_mysql_knowledge_analysis",
     "joint_database_knowledge_analysis": "joint_mysql_knowledge_analysis",
+    "hybrid_research": "hybrid_research_qa",
+    "hybrid_research_question": "hybrid_research_qa",
+    "cross_source_research": "hybrid_research_qa",
+    "mixed_source_research": "hybrid_research_qa",
     "attachment_summary": "analyze_current_attachment",
     "attachment_analysis": "analyze_current_attachment",
     "attachment_qa": "ask_current_attachment",
@@ -224,6 +230,7 @@ _DOMAIN_BY_INTENT = {
     "search_historical_knowledge": "knowledge",
     "sample_historical_similarity": "diagnosis",
     "joint_mysql_knowledge_analysis": "diagnosis",
+    "hybrid_research_qa": "knowledge",
     "database_explorer": "retrieve",
     "general_conversation": "conversation",
     "unsupported_future_feature": "system",
@@ -455,6 +462,12 @@ class DeepSeekIntentRouter:
 - joint_mysql_knowledge_analysis，tool_name=null
 - 必须提取 left_identifier、right_identifier、target_metric、direction_claim；只有用户明确项目号时才给 project_id。
 
+5A) 混合研究问答：
+- hybrid_research_qa，tool_name=null。
+- 用于需要同时综合外部 MySQL、向量知识库、当前附件或对话约束的开放研究问题；例如相似配方、失败案例、竞品对标、新项目冷启动、项目知识问答。
+- 可提取 identifier、left_identifier/right_identifier、filters、keyword、project_id、history_query；信息不足时不要编造。
+- 后端会在一个固定 Workflow 中并行召回并统一 EvidenceFrame；不得拆成“数据库回答 + RAG回答”。
+
 6) Database Explorer 兜底：
 - database_explorer，tool_name=null。
 - 只有输入的 backend_capabilities.database_explorer.enabled=true 时才允许使用。
@@ -504,6 +517,7 @@ performance_rank, performance_statistics, experiment_series_analysis, data_quali
 analyze_cause, analyze_performance_difference,
 analyze_current_attachment, ask_current_attachment,
 search_historical_knowledge, sample_historical_similarity, joint_mysql_knowledge_analysis,
+hybrid_research_qa,
 database_explorer, general_conversation, unsupported_future_feature, clarification_required,
 engine_prepare_dataset, automl_training, predict_performance, optimize_formula, recommend_next_experiments
 
@@ -1023,6 +1037,7 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
             "sample_full_profile",
             "analyze_cause",
             "similar_samples",
+            "hybrid_research_qa",
         }:
             # Explicit user sample is authoritative over any model extraction.
             if len(current_samples) == 1:
@@ -1064,6 +1079,22 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
                 if metric:
                     result["target_metric"] = metric
 
+        if intent == "hybrid_research_qa" and not str(
+            result.get("identifier") or ""
+        ).strip():
+            non_project_samples = [
+                item
+                for item in hints.current_sample_identifiers
+                if str(item) not in {str(value) for value in hints.current_project_ids}
+            ]
+            named_samples = [
+                item for item in non_project_samples if re.search(r"[A-Za-z]", str(item))
+            ]
+            if len(named_samples) == 1:
+                non_project_samples = named_samples
+            if len(non_project_samples) == 1:
+                result["identifier"] = non_project_samples[0]
+
         if intent in {
             "compare_samples",
             "formula_difference",
@@ -1071,6 +1102,7 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
             "comparability_check",
             "analyze_performance_difference",
             "joint_mysql_knowledge_analysis",
+            "hybrid_research_qa",
         }:
             if len(current_samples) >= 2:
                 for key, explicit_identifier in (
@@ -1108,6 +1140,7 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
             "comparability_check",
             "analyze_performance_difference",
             "joint_mysql_knowledge_analysis",
+            "hybrid_research_qa",
         } and not str(result.get("target_metric") or "").strip():
             current_metrics = list(hints.current_metrics)
             recent_metrics = list(hints.recent_metrics)
@@ -1122,6 +1155,7 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
             "search_historical_knowledge",
             "sample_historical_similarity",
             "historical_similar_case",
+            "hybrid_research_qa",
         } and hints.effective_history_query:
             result["history_query"] = hints.effective_history_query
 
@@ -1386,6 +1420,18 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
                 "direction_claim",
                 "project_id",
             },
+            "hybrid_research_qa": {
+                "identifier",
+                "left_identifier",
+                "right_identifier",
+                "filters",
+                "logic",
+                "keyword",
+                "result_limit",
+                "project_id",
+                "history_query",
+                "query",
+            },
             "database_explorer": set(),
             "general_conversation": set(),
             "unsupported_future_feature": set(),
@@ -1465,6 +1511,7 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
             "historical_similar_case",
             "sample_historical_similarity",
             "joint_mysql_knowledge_analysis",
+            "hybrid_research_qa",
             "engine_prepare_dataset",
             "automl_training",
             "predict_performance",
@@ -1733,6 +1780,15 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
                     name="joint_mysql_knowledge",
                     args=dict(args),
                     purpose="联合数据库事实与历史证据",
+                ),
+            )
+        if intent == "hybrid_research_qa":
+            return (
+                IntentToolPlanStep(
+                    kind="workflow",
+                    name="hybrid_research_qa",
+                    args=dict(args),
+                    purpose="并行召回 MySQL、向量、上传与对话输入并统一 EvidenceFrame",
                 ),
             )
         return ()

@@ -7,6 +7,13 @@ from agent.core import AgentCore
 from agent.engine_tool_registration import register_engine_tools
 from agent.engine_workflow_adapter import EngineWorkflowAdapter
 from agent.material_tool_registration import register_material_tools
+from agent.vector_search import (
+    ExternalVectorAPIGateway,
+    QdrantVectorSearchGateway,
+    VectorSearchService,
+    VectorSearchTool,
+)
+from agent.vector_tool_registration import register_vector_tools
 from agent.service import MaterialsAgentService
 from agent.scenario_composer import ScenarioWorkflowComposer
 from agent.tool_registry import ToolRegistry
@@ -35,7 +42,9 @@ from skills.current_attachment import CurrentAttachmentSkill
 from skills.database_explorer import DatabaseExplorerSkill
 from skills.general_conversation import GeneralConversationFallbackSkill
 from skills.historical_knowledge import HistoricalKnowledgeRAGSkill
+from skills.hybrid_research_qa import HybridResearchQASkill
 from skills.joint_mysql_knowledge import JointMySQLKnowledgeAnalysisSkill
+from skills.material_intelligence import MaterialIntelligenceSkill
 from skills.sample_historical_similarity import SampleHistoricalSimilaritySkill
 from skills.catalog import build_default_skill_registry
 from knowledge import OpenAICompatibleEmbeddingProvider, QdrantKnowledgeRepository
@@ -78,6 +87,25 @@ class ApplicationContainer:
         )
         register_material_tools(self.registry, self.tools)
         register_engine_tools(self.registry)
+
+        if settings.vector_search_provider == "external_api":
+            settings.require_vector_search()
+            vector_gateway = ExternalVectorAPIGateway(
+                endpoint=settings.external_vector_api_endpoint,
+                api_key=settings.external_vector_api_key.get_secret_value(),
+                timeout_seconds=float(settings.external_vector_api_timeout),
+            )
+        else:
+            vector_gateway = QdrantVectorSearchGateway(
+                self.open_knowledge_repository,
+                provider_name="legacy_qdrant",
+            )
+        self.vector_search_service = VectorSearchService(
+            gateway=vector_gateway,
+            default_limit=settings.knowledge_rag_max_hits,
+            default_score_threshold=settings.knowledge_rag_score_threshold,
+        )
+        register_vector_tools(self.registry, VectorSearchTool(self.vector_search_service))
         self.engine_workflow_adapter = EngineWorkflowAdapter(
             self.registry,
             artifact_root=settings.engine_artifact_root,
@@ -172,6 +200,16 @@ class ApplicationContainer:
             self.llm,
             score_threshold=settings.knowledge_rag_score_threshold,
             max_hits=settings.knowledge_rag_max_hits,
+        )
+        self.hybrid_material_intelligence_skill = MaterialIntelligenceSkill(
+            self.registry
+        )
+        self.hybrid_research_qa_skill = HybridResearchQASkill(
+            registry=self.registry,
+            llm=self.llm,
+            material_intelligence=self.hybrid_material_intelligence_skill,
+            attachment_store=self.chat_attachment_store,
+            max_vector_hits=settings.knowledge_rag_max_hits,
         )
 
         self.core = AgentCore(

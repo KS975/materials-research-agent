@@ -174,6 +174,40 @@ def test_v4_native_historical_rag_executor():
     assert response.tool_args["project_id"] == 115
 
 
+def test_v4_native_hybrid_research_executor_passes_attachments_and_scope():
+    received = {}
+
+    def answer(**kwargs):
+        received.update(kwargs)
+        return {
+            "status": "ok",
+            "answer": "hybrid-ok",
+            "evidence": [{"record_id": "mysql-1"}],
+            "warnings": [],
+        }
+
+    container = SimpleNamespace(
+        hybrid_research_qa_skill=SimpleNamespace(answer=answer)
+    )
+    response = chat_ui_module._execute_semantic_rag(
+        _base_state(
+            intent="hybrid_research_qa",
+            container=container,
+            tool_args={"project_id": 115, "identifier": "EXP-128"},
+            body=ChatUIRequest(
+                message="查 EXP-128，并结合历史资料。",
+                attachment_ids=["attachment-1"],
+            ),
+        )
+    )
+
+    assert response.answer == "hybrid-ok"
+    assert response.intent == "hybrid_research_qa"
+    assert received["attachment_ids"] == ["attachment-1"]
+    assert received["tool_args"]["identifier"] == "EXP-128"
+    assert received["ctx"].company_id == "company-v4"
+
+
 def test_v4_native_material_tool_executor():
     core = SimpleNamespace(
         execute=lambda intent, tool_name, tool_args, ctx: {
