@@ -263,6 +263,31 @@ aside{min-height:0;padding:22px 14px 16px}.brand{flex:0 0 auto;padding:0 8px 20p
 }
 
 /* Engine Workflow V0.2: task state and UI-neutral visualization datasets */
+.evidenceFrameCard{overflow:hidden;margin:0 0 12px;border:1px solid #dbe4ff;border-radius:8px;background:#fff;box-shadow:0 1px 2px #0000000a}
+.evidenceFrameCard.good{border-color:#a7f3d0}.evidenceFrameCard.warn{border-color:#f7df9a}.evidenceFrameCard.bad{border-color:#fecaca}
+.evidenceFrameCard>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border-bottom:1px solid #edf0f4}
+.evidenceFrameCard>header>div{display:grid;min-width:0;gap:2px}
+.evidenceFrameCard small{color:#6b7280;font:10px ui-monospace,monospace;letter-spacing:.08em}
+.evidenceFrameCard>header b{color:#111827;font-size:15px}
+.evidenceMetrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;padding:11px 12px}
+.evidenceMetrics>div{display:grid;min-width:0;gap:2px;padding:8px;border:1px solid #e5e7eb;border-radius:7px;background:#fafafa}
+.evidenceMetrics span{overflow:hidden;color:#7b8497;font-size:10.5px;text-overflow:ellipsis;white-space:nowrap}
+.evidenceMetrics b{overflow:hidden;color:#344054;font-size:14px;text-overflow:ellipsis;white-space:nowrap}
+.evidenceTableWrap{overflow-x:auto;padding:0 12px 11px}
+.evidenceTableWrap table{width:100%;min-width:560px;border-collapse:collapse;font-size:11.5px}
+.evidenceTableWrap th{padding:7px 8px;border-bottom:1px solid #e5e7eb;color:#667085;background:#f8fafc;text-align:left;white-space:nowrap}
+.evidenceTableWrap td{max-width:170px;padding:7px 8px;border-bottom:1px solid #f1f3f6;color:#475467;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.evidenceTableWrap small{color:#98a2b3;font-size:10.5px}
+.evidenceConflicts{margin:0 12px 11px;border:1px solid #fecaca;border-radius:7px;background:#fffafa}
+.evidenceConflicts summary{padding:8px 9px;color:#b42318;font-size:11.5px;cursor:pointer}
+.evidenceConflicts div{display:grid;gap:5px;padding:0 9px 9px}
+.evidenceConflicts p{display:grid;gap:2px;margin:0}
+.evidenceConflicts b{color:#b42318;font-size:11px}.evidenceConflicts span{color:#7a5b5b;font-size:10.5px}
+.evidenceWarnings{display:grid;gap:5px;margin:0 12px 12px;padding:8px 9px;border-left:2px solid #e4bd62;background:#fffaf0;color:#7a5b13;font-size:11.5px;line-height:1.45}
+.evidenceFrameCard .statusPill{padding:4px 7px;border:1px solid rgba(255,255,255,.08);border-radius:999px;color:#8691a5;background:rgba(255,255,255,.025);font:7px ui-monospace,monospace}
+.evidenceFrameCard .statusPill.good{border-color:rgba(88,201,158,.18);color:#77c8a9;background:rgba(88,201,158,.055)}
+.evidenceFrameCard .statusPill.warn{border-color:rgba(226,184,87,.18);color:#d1b36d;background:rgba(226,184,87,.05)}
+.evidenceFrameCard .statusPill.bad{border-color:rgba(218,101,101,.2);color:#d78f8f;background:rgba(218,101,101,.055)}
 .engineTaskCard,.engineWorkflowCard{margin:0 0 12px;border:1px solid #dbe4ff;border-radius:8px;background:#fff;box-shadow:0 1px 2px #0000000a}
 .engineTaskCard.good,.engineWorkflowCard.good{border-color:#a7f3d0}.engineTaskCard.warn,.engineWorkflowCard.warn{border-color:#f7df9a}.engineTaskCard.bad,.engineWorkflowCard.bad{border-color:#fecaca}
 .engineTaskCard>header,.engineWorkflowCard>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border-bottom:1px solid #edf0f4}
