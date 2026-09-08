@@ -184,7 +184,9 @@ def looks_like_hybrid_research_request(message: str) -> bool:
     text = str(message or "").strip()
     markers = (
         "历史资料", "历史案例", "知识库", "向量库", "结合历史", "综合历史",
-        "相似配方", "类似配方", "相似样品", "类似样品", "相似实验", "类似实验",
+        "相似配方", "相似的配方", "类似配方", "类似的配方", "相近配方", "相近的配方",
+        "相似样品", "相似的样品", "类似样品", "类似的样品", "相近样品", "相近的样品",
+        "相似实验", "相似的实验", "类似实验", "类似的实验", "相近实验", "相近的实验",
         "原料使用效果", "原料替代", "替代历史", "失败配方", "失败实验",
         "异常案例", "失效案例", "竞品对标", "新项目冷启动", "项目知识问答",
         "去年做过", "为什么停用",
@@ -228,9 +230,12 @@ def _classify_message(text: str, args: Mapping[str, Any]) -> int:
         return 13
     if isinstance(args.get("filters"), list) and args["filters"]:
         return 3
-    if any(marker in text for marker in ("相似配方", "类似配方")):
+    if any(marker in text for marker in ("相似配方", "相似的配方", "类似配方", "类似的配方", "相近配方", "相近的配方")):
         return 1
-    if any(marker in text for marker in ("相似样品", "类似样品", "相似实验", "类似实验")):
+    if any(marker in text for marker in (
+        "相似样品", "相似的样品", "类似样品", "类似的样品", "相近样品", "相近的样品",
+        "相似实验", "相似的实验", "类似实验", "类似的实验", "相近实验", "相近的实验",
+    )):
         return 2
     if _EXPLICIT_IDENTIFIER.search(text) or args.get("identifier"):
         return 4

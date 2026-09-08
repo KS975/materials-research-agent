@@ -101,6 +101,68 @@ def test_all_twenty_scenarios_map_to_eight_fixed_workflows() -> None:
         assert scenario_id in plan["covered_scenario_ids"]
 
 
+def test_natural_similarity_phrases_map_to_similarity_workflow() -> None:
+    for message in (
+        "查找与 EXP-128 相似的配方，并结合历史案例。",
+        "找与 EXP-128 类似的样品。",
+        "查与 EXP-128 相近的实验。",
+    ):
+        plan = resolve_research_scenario(message)
+        assert plan["workflow_id"] == "hybrid_search_rank"
+        assert plan["scenario_id"] in {1, 2}
+
+
+def test_filters_take_precedence_over_numeric_identifier_in_scenario_3() -> None:
+    skill = HybridResearchQASkill(
+        registry=FakeRegistry(),
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=lambda *_args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    strategy = skill._structured_strategy(
+        {
+            "identifier": "100",
+            "filters": [
+                {
+                    "section": "performance",
+                    "field": "密度差",
+                    "operator": "gt",
+                    "value": 100,
+                }
+            ],
+        },
+        "查找密度差大于100的历史样品。",
+        3,
+    )
+    assert strategy["strategy"] == "structured_multi_condition_filter"
+    assert strategy["tool_name"] == "list_samples_for_analysis"
+
+
+def test_natural_similarity_phrase_reuses_structured_similarity_strategy() -> None:
+    calls = []
+
+    def execute_intent(intent, tool_name, args, ctx):
+        calls.append((intent, tool_name, dict(args)))
+        return {"status": "ok", "ranking": [], "warnings": []}
+
+    skill = HybridResearchQASkill(
+        registry=FakeRegistry(),
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=execute_intent),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    strategy = skill._structured_strategy(
+        {"identifier": "EXP-128", "top_n": 5},
+        "查找与 EXP-128 相似的配方，并结合历史案例。",
+        1,
+    )
+    strategy["executor"](_ctx())
+
+    assert strategy["strategy"] == "structured_similarity"
+    assert calls[0][:2] == ("similar_samples", "list_samples_for_analysis")
+    assert calls[0][2]["similarity_scope"] == "formula"
+
+
 def test_material_usage_effect_uses_bounded_structured_scan_and_vector_evidence() -> None:
     registry = FakeRegistry()
     skill = HybridResearchQASkill(
@@ -167,7 +229,7 @@ def test_hybrid_similarity_is_not_downgraded_by_deterministic_similarity_router(
             }"""
 
     decision = DeepSeekIntentRouter(RouterLLM()).route(
-        "查找与 EXP-128 相似的配方和历史案例。"
+        "查找与 EXP-128 相似的配方，并结合历史案例。"
     )
     assert decision.intent == "hybrid_research_qa"
     assert decision.tool_name is None

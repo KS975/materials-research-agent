@@ -66,4 +66,17 @@ tests/unit/test_hybrid_research_qa.py
 tests/unit/test_hybrid_research_routing.py
 ```
 
-2026-09-08 定向结果：8 passed。覆盖 20 场景到 8 Workflow 的完整性、原料使用效果、原料替代边界、跨源相似路由不被单源意图降级，以及原有 EvidenceFrame 行为。
+2026-09-08 定向结果：10 passed。覆盖 20 场景到 8 Workflow 的完整性、自然语言相似表述、原料使用效果、原料替代边界、目标性能筛选优先级、跨源相似路由不被单源意图降级，以及原有 EvidenceFrame 行为。
+
+## 5. 2026-09-08 真实只读数据冒烟
+
+环境：本地 FastAPI + 真实业务 MySQL + DeepSeek 语义路由。业务库健康检查为 `connected=true`、`session_read_only=true`。
+
+| 用例 | 结果 | 记录 |
+|---|---|---|
+| 查 EXP-128 的完整研发上下文，并结合历史资料综合判断 | 通过 | 命中场景 4 / `evidence_profile`；MySQL `ok`，生成 16 条结构化证据 |
+| 查找与 EXP-128 相似的配方，并结合历史案例 | 通过 | 命中场景 1 / `hybrid_search_rank`；自然语言“相似的配方”已接入结构化相似策略 |
+| 查“水”的原料使用效果，并结合历史案例 | 通过 | 命中场景 5；授权扫描命中 383 条，默认截断展示 50 条并保留 warning |
+| 查找密度差大于 100 且持液量小于 0.1 的历史样品，并结合历史资料 | 通过 | 命中场景 3 / `structured_multi_condition_filter`；返回 50 条候选、200 条 MySQL 证据 |
+
+向量侧当前仍为 legacy Qdrant 配置，缺少 `EMBEDDING_BASE_URL`，因此所有真实冒烟均显式输出 `vector_unavailable` 和证据缺口警告，未用推测补齐。这不属于 MySQL 链路失败；启用外部向量 API 需要部署配置 `VECTOR_SEARCH_PROVIDER=external_api`、正式 endpoint 和平台请求凭证。

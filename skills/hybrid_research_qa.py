@@ -255,7 +255,13 @@ class HybridResearchQASkill:
             bool(similarity_scope)
             or any(
                 marker in message
-                for marker in ("相似配方", "类似配方", "相似样品", "类似样品", "相似实验", "类似实验")
+                for marker in (
+                    "相似配方", "相似的配方", "类似配方", "类似的配方",
+                    "相近配方", "相近的配方", "相似样品", "相似的样品",
+                    "类似样品", "类似的样品", "相近样品", "相近的样品",
+                    "相似实验", "相似的实验", "类似实验", "类似的实验",
+                    "相近实验", "相近的实验",
+                )
             )
         )
 
@@ -276,6 +282,17 @@ class HybridResearchQASkill:
                 "tool_name": "list_samples_for_analysis",
                 "executor": lambda ctx: self._material_usage_scan(
                     ctx, args, substitution=True
+                ),
+            }
+        if scenario_id == 3 and isinstance(args.get("filters"), list) and args["filters"]:
+            return {
+                "strategy": "structured_multi_condition_filter",
+                "tool_name": "list_samples_for_analysis",
+                "executor": lambda ctx: self.material_intelligence.execute_intent(
+                    "find_samples_multi_condition",
+                    "list_samples_for_analysis",
+                    dict(args),
+                    ctx,
                 ),
             }
         if identifier and wants_similarity:
@@ -384,11 +401,21 @@ class HybridResearchQASkill:
         )
         if not substitution:
             matches = self._samples_using_material(source, material_name)
+            matched_count = len(matches)
+            try:
+                result_limit = max(1, min(int(args.get("result_limit") or 50), 100))
+            except (TypeError, ValueError):
+                result_limit = 50
+            truncated = matched_count > result_limit
+            matches = matches[:result_limit]
             return {
                 "status": "ok",
                 "analysis_type": "material_usage_effect",
                 "material_name": material_name,
                 "count": len(matches),
+                "matched_count": matched_count,
+                "result_limit": result_limit,
+                "truncated": truncated,
                 "matched_samples": matches,
                 "scan_scope": {
                     "sample_count": source.get("count"),
@@ -402,6 +429,13 @@ class HybridResearchQASkill:
                 "warnings": [
                     *list(source.get("warnings") or []),
                     "原料命中基于授权样品的配方字段名称或原始键，不代表供应商或牌号完全相同。",
+                    *(
+                        [
+                            f"原料使用效果命中 {matched_count} 条，超过返回上限 {result_limit}，已截断展示。"
+                        ]
+                        if truncated
+                        else []
+                    ),
                 ],
             }
 

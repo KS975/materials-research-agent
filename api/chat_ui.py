@@ -263,7 +263,9 @@ def _looks_like_hybrid_research(
     if any(
         marker in text
         for marker in (
-            "相似配方", "类似配方", "相似样品", "类似样品", "相似实验", "类似实验",
+            "相似配方", "相似的配方", "类似配方", "类似的配方", "相近配方", "相近的配方",
+            "相似样品", "相似的样品", "类似样品", "类似的样品", "相近样品", "相近的样品",
+            "相似实验", "相似的实验", "类似实验", "类似的实验", "相近实验", "相近的实验",
             "原料使用效果", "原料替代", "失败配方", "失败实验", "异常案例",
             "失效案例", "竞品对标", "新项目冷启动", "项目知识问答",
             "去年做过", "为什么停用",
@@ -917,7 +919,14 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
             plan_summary=summary,
         )
     except Exception as exc:
-        if _looks_like_joint_mysql_knowledge(body.message):
+        if _looks_like_hybrid_research(body.message, body.attachment_ids):
+            intent, tool_name, tool_args = "hybrid_research_qa", None, {}
+            router_name = "hybrid_conservative_fallback"
+            summary = (
+                "语义参数提取失败，已转入保守混合研究检索；"
+                "本轮不会猜测筛选条件或字段值。"
+            )
+        elif _looks_like_joint_mysql_knowledge(body.message):
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -2102,7 +2111,14 @@ def _execute_chat_ui_legacy(
         )
     except Exception as exc:
         # A joint request must never silently degrade to only one evidence source.
-        if _looks_like_joint_mysql_knowledge(body.message):
+        if _looks_like_hybrid_research(body.message, body.attachment_ids):
+            intent, tool_name, tool_args = "hybrid_research_qa", None, {}
+            router_name = "hybrid_conservative_fallback"
+            summary = (
+                "语义参数提取失败，已转入保守混合研究检索；"
+                "本轮不会猜测筛选条件或字段值。"
+            )
+        elif _looks_like_joint_mysql_knowledge(body.message):
             raise HTTPException(
                 status_code=400,
                 detail=(
