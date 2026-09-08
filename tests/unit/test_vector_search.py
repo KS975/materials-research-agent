@@ -131,17 +131,19 @@ def test_external_gateway_uses_platform_token_and_get_contract():
             {
                 "query": "history",
                 "company_id": "company-a",
+                "header_company_id": "platform-company-a",
                 "organization_id": "org-a",
                 "limit": 3,
             }
         )
 
     assert captured["authorization"] == "Bearer platform-token"
-    assert captured["company_id"] == "company-a"
+    assert captured["company_id"] == "platform-company-a"
     assert captured["params"]["queryText"] == "history"
     assert captured["params"]["companyId"] == "company-a"
     assert captured["params"]["organizationId"] == "org-a"
-    assert captured["params"]["limit"] == "3"
+    assert captured["params"]["pageRanges"] == "1-3"
+    assert "limit" not in captured["params"]
     assert "content" not in captured["params"]
     assert hits[0]["point_id"] == "chunk-1"
     assert hits[0]["score"] == 0.88
@@ -187,3 +189,41 @@ def test_external_vector_all_query_keeps_zero_score_hits():
     assert result["status"] == "ok"
     assert result["hit_count"] == 1
     assert result["hits"][0]["score"] == 0.0
+
+
+def test_external_gateway_always_sends_required_query_text():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"code": 0, "data": []})
+
+    gateway = ExternalVectorAPIGateway(
+        endpoint="https://vector.example/api/search",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    gateway.search({"query": "", "company_id": "company-a", "limit": 5})
+
+    assert captured["params"]["queryText"] == ""
+    assert captured["params"]["companyId"] == "company-a"
+    assert captured["params"]["pageRanges"] == "1-5"
+
+
+def test_external_vector_results_are_truncated_to_local_limit():
+    rows = [
+        {
+            "point_id": f"file-{index}",
+            "score": 0.9,
+            "text": f"document {index}",
+            "metadata": {"company_id": "company-a"},
+        }
+        for index in range(1, 5)
+    ]
+    service = VectorSearchService(
+        gateway=FakeGateway(rows, provider="external_vector_api")
+    )
+    result = service.search(query="history", ctx=_ctx(), limit=2)
+
+    assert result["hit_count"] == 2
+    assert [item["point_id"] for item in result["hits"]] == ["file-1", "file-2"]
+    assert any("本地" in warning and "截断" in warning for warning in result["warnings"])

@@ -118,16 +118,19 @@ class ExternalVectorAPIGateway:
         if authorization:
             headers["Authorization"] = f"Bearer {authorization}"
         company_id = str(request.get("company_id") or "")
+        header_company_id = str(request.get("header_company_id") or company_id)
         if company_id:
-            headers[self.company_header] = company_id
+            headers[self.company_header] = header_company_id
 
+        limit = max(1, int(request.get("limit") or 5))
         query = str(request.get("query") or "").strip()
         params: dict[str, Any] = {
+            # The confirmed service treats queryText as a required parameter;
+            # an empty value means “retrieve all” and keeps scores at zero.
+            "queryText": query,
             "companyId": company_id,
-            "limit": max(1, int(request.get("limit") or 5)),
+            "pageRanges": f"1-{limit}",
         }
-        if query:
-            params["queryText"] = query
         organization_id = request.get("organization_id")
         if organization_id is not None and str(organization_id).strip():
             params["organizationId"] = str(organization_id)
@@ -296,6 +299,7 @@ class VectorSearchService:
             "score_threshold": threshold,
             "acting_user_id": ctx.user_id,
             "user_id": ctx.user_id,
+            "header_company_id": ctx.company_id,
             "organization_id": ctx.organization_id,
             "filter_user_id": self.filter_by_user,
         }
@@ -344,6 +348,13 @@ class VectorSearchService:
             authorized_hits.append(hit)
 
         warnings = list(scope_warnings)
+        truncated_count = max(0, len(authorized_hits) - normalized_limit)
+        if truncated_count:
+            authorized_hits = authorized_hits[:normalized_limit]
+            warnings.append(
+                f"外部向量 API 返回结果已按本地上限截断：保留 {normalized_limit} 条，"
+                f"截断 {truncated_count} 条。"
+            )
         if rejected:
             warnings.append(
                 f"外部向量 API 返回 {rejected} 条越权结果，已全部丢弃。"
