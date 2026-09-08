@@ -8,12 +8,22 @@ from uuid import uuid4
 
 import httpx
 
+from runtime.request_credentials import get_request_authorization
 from schemas.user_context import UserContext
 
 
 class VectorSearchGateway(Protocol):
     def name(self) -> str: ...
     def search(self, request: Mapping[str, Any]) -> list[dict[str, Any]]: ...
+
+
+class ExternalVectorAPIError(RuntimeError):
+    """The external vector service returned a structured business error."""
+
+    def __init__(self, *, code: int | str | None, message: str):
+        self.code = code
+        self.message = message[:500]
+        super().__init__(f"外部向量检索失败：code={code}, message={message}")
 
 
 class QdrantVectorSearchGateway:
@@ -91,10 +101,12 @@ class ExternalVectorAPIGateway:
         api_key: str = "",
         timeout_seconds: float = 15.0,
         client: httpx.Client | None = None,
+        company_header: str = "Company-Id",
     ) -> None:
         self.endpoint = endpoint
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
+        self.company_header = company_header
         self._client = client
 
     def name(self) -> str:
@@ -102,20 +114,50 @@ class ExternalVectorAPIGateway:
 
     def search(self, request: Mapping[str, Any]) -> list[dict[str, Any]]:
         headers = {"Accept": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        payload = dict(request)
-        payload["trace_id"] = str(uuid4())
+        authorization = self.api_key or get_request_authorization()
+        if authorization:
+            headers["Authorization"] = f"Bearer {authorization}"
+        company_id = str(request.get("company_id") or "")
+        if company_id:
+            headers[self.company_header] = company_id
+
+        query = str(request.get("query") or "").strip()
+        params: dict[str, Any] = {
+            "companyId": company_id,
+            "limit": max(1, int(request.get("limit") or 5)),
+        }
+        if query:
+            params["queryText"] = query
+        organization_id = request.get("organization_id")
+        if organization_id is not None and str(organization_id).strip():
+            params["organizationId"] = str(organization_id)
+        if request.get("filter_user_id"):
+            params["userId"] = str(request.get("user_id") or "")
 
         client = self._client or httpx.Client(timeout=self.timeout_seconds)
         owns_client = self._client is None
         try:
-            response = client.post(self.endpoint, headers=headers, json=payload)
+            response = client.get(
+                self.endpoint,
+                headers=headers,
+                params=params,
+            )
             response.raise_for_status()
             body = response.json()
         finally:
             if owns_client:
                 client.close()
+
+        if isinstance(body, Mapping):
+            code = body.get("code")
+            if code not in (None, 0, 200):
+                message = str(
+                    body.get("messageZh")
+                    or body.get("message")
+                    or body.get("error")
+                    or "unknown error"
+                )
+                raise ExternalVectorAPIError(code=code, message=message)
 
         rows = self._rows(body)
         return [self._normalize_row(row) for row in rows if isinstance(row, Mapping)]
@@ -138,6 +180,17 @@ class ExternalVectorAPIGateway:
 
     def _normalize_row(self, row: Mapping[str, Any]) -> dict[str, Any]:
         metadata = dict(row.get("metadata") or row.get("payload") or {})
+        for source, target in (
+            ("companyId", "company_id"),
+            ("organizationId", "organization_id"),
+            ("userId", "user_id"),
+            ("fileName", "filename"),
+            ("fileSize", "file_size"),
+            ("uploadTime", "upload_time"),
+            ("contentType", "content_type"),
+        ):
+            if source in metadata:
+                metadata[target] = metadata[source]
         point_id = next(
             (str(row[key]) for key in self._ID_KEYS if row.get(key) is not None),
             str(uuid4()),
@@ -147,12 +200,18 @@ class ExternalVectorAPIGateway:
             1.0,
         )
         text = next(
-            (str(row[key]) for key in self._TEXT_KEYS if row.get(key) is not None),
+            (
+                str(value)
+                for key in self._TEXT_KEYS
+                if (value := row.get(key, metadata.get(key))) is not None
+            ),
             "",
         )
         for key in ("project_id", "company_id", "document_id", "filename"):
             if row.get(key) is not None:
                 metadata.setdefault(key, row[key])
+        for text_key in self._TEXT_KEYS:
+            metadata.pop(text_key, None)
         return {
             "point_id": point_id,
             "score": self._score(score),
@@ -179,6 +238,7 @@ class VectorSearchService:
     gateway: VectorSearchGateway
     default_limit: int = 5
     default_score_threshold: float = 0.42
+    filter_by_user: bool = False
 
     def search(
         self,
@@ -191,7 +251,8 @@ class VectorSearchService:
         score_threshold: float | None = None,
     ) -> dict[str, Any]:
         normalized_query = str(query or "").strip()
-        if not normalized_query:
+        is_external_api = self.gateway.name() == "external_vector_api"
+        if not normalized_query and not is_external_api:
             raise ValueError("向量检索 query 不能为空")
         normalized_limit = max(1, min(int(limit), 50))
         threshold = (
@@ -216,14 +277,27 @@ class VectorSearchService:
             else:
                 raise PermissionError("当前用户没有可用于向量检索的项目权限")
 
+        scope_warnings: list[str] = []
+        if is_external_api:
+            # The confirmed service filters by company and optionally by
+            # organization/user. It does not expose a project dimension.
+            if projects:
+                scope_warnings.append(
+                    "外部向量 API 不支持项目维度过滤，本次按公司授权范围检索。"
+                )
+            projects = []
+
         request = {
             "query": normalized_query,
             "company_id": ctx.company_id,
-            "project_ids": projects,
-            "all_projects": all_projects,
+            "project_ids": [] if is_external_api else projects,
+            "all_projects": bool(all_projects and not is_external_api),
             "limit": normalized_limit,
             "score_threshold": threshold,
             "acting_user_id": ctx.user_id,
+            "user_id": ctx.user_id,
+            "organization_id": ctx.organization_id,
+            "filter_user_id": self.filter_by_user,
         }
         hits = self.gateway.search(request)
         authorized_hits: list[dict[str, Any]] = []
@@ -239,23 +313,37 @@ class VectorSearchService:
             except (TypeError, ValueError):
                 score = -1.0
                 valid_score = False
-            if not valid_score or score < threshold:
+            if not valid_score or (normalized_query and score < threshold):
                 low_score += 1
                 continue
             if company_id is None or str(company_id) != str(ctx.company_id):
                 rejected += 1
                 continue
             if not all_projects:
-                try:
-                    project_allowed = int(project_id) in projects
-                except (TypeError, ValueError):
-                    project_allowed = False
-                if not project_allowed:
+                if not is_external_api:
+                    try:
+                        project_allowed = int(project_id) in projects
+                    except (TypeError, ValueError):
+                        project_allowed = False
+                    if not project_allowed:
+                        rejected += 1
+                        continue
+                organization_id = metadata.get("organization_id")
+                if (
+                    ctx.organization_id is not None
+                    and organization_id is not None
+                    and str(organization_id) != str(ctx.organization_id)
+                ):
                     rejected += 1
                     continue
+                if self.filter_by_user:
+                    result_user_id = metadata.get("user_id")
+                    if result_user_id is None or str(result_user_id) != str(ctx.user_id):
+                        rejected += 1
+                        continue
             authorized_hits.append(hit)
 
-        warnings = []
+        warnings = list(scope_warnings)
         if rejected:
             warnings.append(
                 f"外部向量 API 返回 {rejected} 条越权结果，已全部丢弃。"

@@ -111,8 +111,11 @@ class Settings(BaseSettings):
     vector_search_provider: Literal["legacy_qdrant", "external_api"] = "legacy_qdrant"
     external_vector_api_endpoint: str = ""
     external_vector_api_key: SecretStr = SecretStr("")
+    external_vector_auth_mode: Literal["platform_user_token", "service_token"] = (
+        "platform_user_token"
+    )
     external_vector_api_timeout: float = 15.0
-    external_vector_api_allow_anonymous: bool = False
+    external_vector_api_filter_user_id: bool = False
 
     # V0.1.2 T06: historical RAG retrieval guardrails
     knowledge_rag_score_threshold: float = 0.42
@@ -263,8 +266,8 @@ class Settings(BaseSettings):
         if not self.external_vector_api_endpoint.strip():
             missing.append("EXTERNAL_VECTOR_API_ENDPOINT")
         if (
-            not self.external_vector_api_key.get_secret_value()
-            and not self.external_vector_api_allow_anonymous
+            self.external_vector_auth_mode == "service_token"
+            and not self.external_vector_api_key.get_secret_value()
         ):
             missing.append("EXTERNAL_VECTOR_API_KEY")
         if missing:

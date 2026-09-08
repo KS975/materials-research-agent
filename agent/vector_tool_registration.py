@@ -14,7 +14,7 @@ VECTOR_TOOL_SPECS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
             "required": ["query"],
             "properties": {
-                "query": {"type": "string", "minLength": 1, "maxLength": 2000},
+                "query": {"type": "string", "minLength": 0, "maxLength": 2000},
                 "project_ids": {
                     "type": "array",
                     "items": {"type": "integer"},

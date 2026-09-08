@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Any
 
 from agent.evidence_frame import EvidenceFrameBuilder
@@ -96,7 +97,9 @@ class HybridResearchQASkill:
         vector_warnings: list[str] = []
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="hybrid-qa") as pool:
             mysql_future = pool.submit(strategy["executor"], scoped_ctx)
+            vector_context = copy_context()
             vector_future = pool.submit(
+                vector_context.run,
                 self.registry.execute,
                 self.vector_tool_name,
                 query=query,

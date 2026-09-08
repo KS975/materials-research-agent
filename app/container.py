@@ -92,7 +92,11 @@ class ApplicationContainer:
             settings.require_vector_search()
             vector_gateway = ExternalVectorAPIGateway(
                 endpoint=settings.external_vector_api_endpoint,
-                api_key=settings.external_vector_api_key.get_secret_value(),
+                api_key=(
+                    settings.external_vector_api_key.get_secret_value()
+                    if settings.external_vector_auth_mode == "service_token"
+                    else ""
+                ),
                 timeout_seconds=float(settings.external_vector_api_timeout),
             )
         else:
@@ -104,6 +108,7 @@ class ApplicationContainer:
             gateway=vector_gateway,
             default_limit=settings.knowledge_rag_max_hits,
             default_score_threshold=settings.knowledge_rag_score_threshold,
+            filter_by_user=settings.external_vector_api_filter_user_id,
         )
         register_vector_tools(self.registry, VectorSearchTool(self.vector_search_service))
         self.engine_workflow_adapter = EngineWorkflowAdapter(

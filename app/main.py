@@ -15,6 +15,7 @@ from api.engine_tasks import router as engine_tasks_router
 from api.skills import router as skills_router
 from app.config import get_settings
 from app.logging_config import configure_logging
+from runtime.request_credentials import request_authorization_scope
 from api.chat_ui import router as chat_ui_router
 
 
@@ -40,3 +41,11 @@ app.include_router(knowledge_router)
 app.include_router(dashboard_router)
 app.include_router(engine_tasks_router)
 app.include_router(skills_router)
+
+
+@app.middleware("http")
+async def bind_request_credentials(request, call_next):
+    """Expose the platform credential only inside this request scope."""
+
+    with request_authorization_scope(request.headers.get("authorization")):
+        return await call_next(request)
