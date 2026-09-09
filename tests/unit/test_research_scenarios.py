@@ -7,6 +7,7 @@ from agent.research_scenarios import (
     RESEARCH_WORKFLOWS,
     resolve_research_scenario,
 )
+from agent.scenario_aggregator import aggregate_scenario_result
 from schemas.user_context import UserContext
 from skills.hybrid_research_qa import HybridResearchQASkill
 
@@ -310,6 +311,50 @@ def test_scenario20_cross_project_is_read_only() -> None:
     assert result["research_workflow"]["execution_status"] == "SUPPORTED_DISPLAY"
     assert result["research_workflow"]["write_policy"] == "NO_WRITE"
     assert result["mysql_result"]["analysis_type"] == "cross_project_asset_query"
+
+
+def test_aggregator_produces_similarity_summary_with_ranking() -> None:
+    mysql_result = {
+        "status": "ok",
+        "analysis_type": "similar_samples",
+        "reference_sample": {"id": 932, "name": "EXP-128"},
+        "formula": [
+            {"name": "水", "value": 0.00125, "unit": "%", "resolved": True},
+            {"name": "P507+煤油", "value": 0.0015, "unit": "%", "resolved": True},
+        ],
+        "ranking": [
+            {
+                "sample": {"id": 933, "name": "EXP-097"},
+                "similarity_percent": "92.00",
+                "section_details": {"formula": {"field_coverage_percent": "100.00"}},
+            },
+        ],
+    }
+    summary = aggregate_scenario_result(1, mysql_result)
+    assert summary["aggregated_type"] == "similarity_ranking"
+    assert summary["reference_sample"]["name"] == "EXP-128"
+    assert summary["ranking"][0]["sample_id"] == 933
+    assert summary["ranking"][0]["similarity"] == "92.00"
+
+
+def test_aggregator_produces_material_summary_with_cleaned_name() -> None:
+    mysql_result = {
+        "status": "ok",
+        "analysis_type": "material_usage_effect",
+        "material_name": "水",
+        "matched_count": 3,
+        "matched_samples": [
+            {
+                "sample": {"id": 1001, "name": "EXP-001"},
+                "formula": [{"name": "水", "value": 0.0012, "unit": "%"}],
+                "performance": [{"name": "密度差", "value": 108}],
+            },
+        ],
+    }
+    summary = aggregate_scenario_result(5, mysql_result)
+    assert summary["aggregated_type"] == "material_usage"
+    assert summary["material_name"] == "水"
+    assert summary["top_candidates"][0]["sample_id"] == 1001
 
 
 def test_hybrid_similarity_is_not_downgraded_by_deterministic_similarity_router() -> None:

@@ -145,7 +145,7 @@ def test_key_variable_hybrid_result_adds_derived_evidence_and_chart_data():
     assert result["structured_strategy"]["strategy"] == "authorized_evidence_dataset_scan"
     assert result["analysis_result"]["status"] == "ok"
     assert result["chart_data"][0]["chart_type"] == "bar"
-    assert result["evidence_frame"]["source_summary"]["derived"] == 1
+    assert result["evidence_frame"]["source_summary"]["derived"] == 2
     assert result["synthesis"]["mode"] == "deterministic_analysis_report"
     assert result["synthesis"]["citation_validation"]["valid_count"] >= 1
     assert "derived-" in result["answer"]

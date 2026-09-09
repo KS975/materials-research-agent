@@ -13,6 +13,7 @@ from agent.research_analysis import (
     research_analysis_chart_data,
     run_research_analysis,
 )
+from agent.scenario_aggregator import aggregate_scenario_result, serialize_aggregated_summary
 from agent.research_scenarios import resolve_research_scenario
 from agent.research_slots import normalize_research_slots, parse_target_filters
 from llm.base import LLMProvider
@@ -213,6 +214,8 @@ class HybridResearchQASkill:
         builder.add_upload_records(attachments)
         analysis_result: dict[str, Any] | None = None
         analysis_record_id: str | None = None
+        aggregated_summary: dict[str, Any] | None = None
+        aggregated_record_id: str | None = None
         if research_workflow["scenario_id"] in _STAGE4_SCENARIOS:
             emit_progress(
                 "evidence_dataset_build",
@@ -246,6 +249,21 @@ class HybridResearchQASkill:
                 analysis_status=str(analysis_result.get("status")),
                 chart_data=research_analysis_chart_data(analysis_result),
             )
+
+        if research_workflow["scenario_id"] not in _INTERFACE_RESERVED_SCENARIOS:
+            aggregated_summary = aggregate_scenario_result(
+                scenario_id=research_workflow["scenario_id"],
+                mysql_result=mysql_result if isinstance(mysql_result, dict) else {},
+                vector_result=vector_result,
+                analysis_result=analysis_result,
+            )
+            aggregated_record_id = builder.add_derived_result({
+                "analysis_type": "scenario_aggregated_summary",
+                "status": "ok",
+                "scenario_id": research_workflow["scenario_id"],
+                "summary": aggregated_summary,
+                "warnings": [],
+            })
         frame = builder.build(warnings=[*vector_warnings, *scenario_warnings])
         source_relation = build_source_relation(frame, vector_result)
 
@@ -559,6 +577,7 @@ class HybridResearchQASkill:
             material_name = str(
                 args.get("material_name") or args.get("keyword") or ""
             ).strip()
+            material_name = self._clean_material_name(material_name)
             if not material_name:
                 raise ValueError("原料使用效果查询缺少 material_name")
         source = self.registry.execute(
@@ -646,6 +665,18 @@ class HybridResearchQASkill:
                 "同一样品同时含两种原料只能说明共存，不能自动证明发生过替代；替代结论需结合时间、项目记录和文档证据。",
             ],
         }
+
+    @staticmethod
+    def _clean_material_name(raw: str) -> str:
+        """Strip common query verbs from a material name extracted from a question."""
+        name = str(raw or "").strip()
+        for prefix in ("查", "查询", "查找", "看", "查看", "了解一下"):
+            if name.startswith(prefix):
+                candidate = name[len(prefix):].strip()
+                if candidate:
+                    return candidate
+                break
+        return name
 
     def _interface_reserved_result(
         self,
@@ -992,6 +1023,23 @@ class HybridResearchQASkill:
         if parts:
             suffix = {5: "使用效果", 6: "替代历史", 12: "异常失效", 13: "竞品对标"}
             return " ".join([*parts, suffix.get(scenario_id, "")]).strip()
+        if scenario_id in {1, 2, 3, 4, 14}:
+            identifier = str(args.get("identifier") or "")
+            if not identifier:
+                found = _EXPLICIT_IDENTIFIER.findall(default_query)
+                identifier = found[-1] if len(found) == 1 else ""
+            keyword = str(args.get("keyword") or "")
+            filters = args.get("filters") or []
+            filter_terms = [
+                str(item.get("field") or item.get("section") or "")
+                for item in filters
+                if isinstance(item, dict)
+            ]
+            parts = [identifier, keyword, *filter_terms]
+            return " ".join(p for p in parts if p).strip() or default_query
+        if scenario_id == 17:
+            keyword = str(args.get("keyword") or args.get("project_name") or "")
+            return keyword if keyword else default_query
         return default_query
 
     @staticmethod

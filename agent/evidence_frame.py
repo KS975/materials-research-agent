@@ -18,6 +18,7 @@ from schemas.evidence import (
     new_evidence_frame_id,
 )
 from schemas.user_context import UserContext
+from agent.scenario_aggregator import serialize_aggregated_summary
 
 
 _ENTITY_ID_KEYS = (
@@ -122,6 +123,31 @@ class EvidenceFrameBuilder:
     def add_derived_result(self, result: Mapping[str, Any]) -> str:
         """Register deterministic analysis output as traceable derived evidence."""
         analysis_type = str(result.get("analysis_type") or "research_analysis")
+        if analysis_type == "scenario_aggregated_summary":
+            summary = result.get("summary") or {}
+            value = serialize_aggregated_summary(summary)
+            record_id = self._stable_id("derived", ["scenario_aggregated_summary", value])
+            self.records.append(
+                EvidenceRecord(
+                    record_id=record_id,
+                    subject_id=f"aggregation:scenario_{result.get('scenario_id')}",
+                    entity_type="scenario_summary",
+                    attribute="structured_summary",
+                    value=value,
+                    source_type=EvidenceSourceType.DERIVED,
+                    source_uri=f"derived://scenario-aggregation/{result.get('scenario_id')}",
+                    confidence=1.0,
+                    authority_level=EvidenceAuthority.EXTRACTED,
+                    review_status=EvidenceReviewStatus.AUTO,
+                    permission_scope=self._permission_scope(),
+                    alignment_level="L1",
+                    metadata={
+                        "deterministic": True,
+                        "priority": 80,
+                    },
+                )
+            )
+            return record_id
         compact = {
             "status": result.get("status"),
             "analysis_type": analysis_type,

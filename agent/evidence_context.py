@@ -200,7 +200,10 @@ class EvidenceContextCompressor:
         if record.source_type.value == "mysql":
             score += 20
         elif record.source_type.value == "derived":
-            score += 30
+            if record.entity_type == "scenario_summary":
+                score += 80
+            else:
+                score += 30
         elif record.source_type.value == "vector_api":
             score += 14 + float(record.confidence) * 10
         elif record.source_type.value == "upload":
