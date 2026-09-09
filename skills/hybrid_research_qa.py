@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -7,7 +8,9 @@ from typing import Any
 
 from agent.evidence_frame import EvidenceFrameBuilder
 from agent.evidence_context import EvidenceContextCompressor
+from agent.evidence_relation import build_source_relation
 from agent.research_scenarios import resolve_research_scenario
+from agent.research_slots import normalize_research_slots, parse_target_filters
 from llm.base import LLMProvider
 from runtime.chat_attachments import ChatAttachmentStore
 from runtime.progress import emit_progress
@@ -19,6 +22,7 @@ _EXPLICIT_IDENTIFIER = re.compile(
     r"(?<![A-Za-z0-9_.-])(?:[A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*|\d{2,})"
     r"(?![A-Za-z0-9_.-])"
 )
+
 
 
 class HybridResearchQASkill:
@@ -56,7 +60,10 @@ class HybridResearchQASkill:
         ctx: UserContext,
         attachment_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        args = dict(tool_args or {})
+        args = normalize_research_slots(
+            message=message,
+            args=dict(tool_args or {}),
+        )
         scoped_ctx, project_ids, all_projects, scope = self._resolve_scope(
             args, ctx
         )
@@ -67,6 +74,20 @@ class HybridResearchQASkill:
                 f"研究场景“{research_workflow['scenario_name']}”属于"
                 f"{research_workflow['execution_status']}，当前切片未开放执行"
             )
+        if research_workflow["scenario_id"] in {3, 14}:
+            if not isinstance(args.get("filters"), list) or not args["filters"]:
+                parsed_filters = parse_target_filters(message)
+                if parsed_filters:
+                    args["filters"] = parsed_filters
+            elif args["filters"]:
+                args["filters"] = [
+                    {
+                        **item,
+                        "section": str(item.get("section") or "performance"),
+                    }
+                    for item in args["filters"]
+                    if isinstance(item, dict)
+                ]
 
         emit_progress(
             "hybrid_research_plan",
@@ -164,12 +185,17 @@ class HybridResearchQASkill:
                 self.attachment_store.get(str(attachment_id), scoped_ctx)
             )
 
+        scenario_warnings = self._scenario_boundary_warnings(
+            research_workflow["scenario_id"],
+            mysql_result if isinstance(mysql_result, dict) else {},
+        )
         builder = EvidenceFrameBuilder(ctx=scoped_ctx)
         builder.add_dialog_record(message)
         builder.add_mysql_result(mysql_result if isinstance(mysql_result, dict) else {})
         builder.add_vector_result(vector_result)
         builder.add_upload_records(attachments)
-        frame = builder.build(warnings=vector_warnings)
+        frame = builder.build(warnings=[*vector_warnings, *scenario_warnings])
+        source_relation = build_source_relation(frame, vector_result)
 
         emit_progress(
             "evidence_alignment",
@@ -184,7 +210,11 @@ class HybridResearchQASkill:
             source_summary=frame.source_summary,
         )
 
-        answer, synthesis = self._synthesize(message=message, frame=frame)
+        answer, synthesis = self._synthesize(
+            message=message,
+            frame=frame,
+            source_relation=source_relation,
+        )
         emit_progress(
             "hybrid_final_report",
             "completed",
@@ -207,6 +237,8 @@ class HybridResearchQASkill:
             warnings.append(
                 "LLM 综合失败，已降级为后端确定性证据摘要；跨源综合结论需重新生成。"
             )
+        if source_relation["level"] != "ENTITY_LINKED":
+            warnings.append(source_relation["warning"])
         source_types = set(frame.source_summary)
         status = "ok" if frame.records else "no_evidence"
         if source_types and source_types <= {"dialog"}:
@@ -218,6 +250,7 @@ class HybridResearchQASkill:
             "synthesis": synthesis,
             "analysis_type": "hybrid_research_qa",
             "query": query,
+            "resolved_tool_args": args,
             "research_workflow": research_workflow,
             "analysis_scope": scope,
             "structured_strategy": {
@@ -227,6 +260,7 @@ class HybridResearchQASkill:
             "mysql_result": mysql_result,
             "vector_result": vector_result,
             "evidence_frame": frame.model_dump(mode="json"),
+            "source_relation": source_relation,
             "vector_fact_extraction": {
                 "status": "NOT_SUPPORTED",
                 "reason": "本期不从向量文本抽取结构化建模事实；向量证据仅作为回答证据。",
@@ -260,14 +294,16 @@ class HybridResearchQASkill:
         similarity_scope = str(args.get("similarity_scope") or "").strip()
         wants_similarity = (
             bool(similarity_scope)
-            or any(
-                marker in message
-                for marker in (
-                    "相似配方", "相似的配方", "类似配方", "类似的配方",
-                    "相近配方", "相近的配方", "相似样品", "相似的样品",
-                    "类似样品", "类似的样品", "相近样品", "相近的样品",
-                    "相似实验", "相似的实验", "类似实验", "类似的实验",
-                    "相近实验", "相近的实验",
+            or (
+                any(
+                    marker in message
+                    for marker in ("相似", "类似", "相近", "最像", "最接近", "接近")
+                )
+                and any(
+                    marker in message
+                    for marker in (
+                        "配方", "组分", "原料", "样品", "实验", "工艺", "条件", "性能"
+                    )
                 )
             )
         )
@@ -291,14 +327,30 @@ class HybridResearchQASkill:
                     ctx, args, substitution=True
                 ),
             }
-        if scenario_id == 3 and isinstance(args.get("filters"), list) and args["filters"]:
+        target_filters = list(args.get("filters") or [])
+        if target_filters:
+            target_filters = [
+                {
+                    **item,
+                    "section": str(item.get("section") or "performance"),
+                }
+                for item in target_filters
+                if isinstance(item, dict)
+            ]
+        if not target_filters and scenario_id in {3, 14}:
+            target_filters = parse_target_filters(message)
+        if scenario_id in {3, 14} and target_filters:
+            filter_args = {
+                **dict(args),
+                "filters": target_filters,
+            }
             return {
                 "strategy": "structured_multi_condition_filter",
                 "tool_name": "list_samples_for_analysis",
                 "executor": lambda ctx: self.material_intelligence.execute_intent(
                     "find_samples_multi_condition",
                     "list_samples_for_analysis",
-                    dict(args),
+                    filter_args,
                     ctx,
                 ),
             }
@@ -537,7 +589,30 @@ class HybridResearchQASkill:
             return " ".join([*parts, suffix.get(scenario_id, "")]).strip()
         return default_query
 
-    def _synthesize(self, *, message: str, frame) -> tuple[str, dict[str, Any]]:
+    @staticmethod
+    def _scenario_boundary_warnings(
+        scenario_id: int,
+        mysql_result: dict[str, Any],
+    ) -> list[str]:
+        if scenario_id == 7:
+            return [
+                "当前结构化库没有通用“失败”标签；MySQL 仅提供授权样品上下文，"
+                "失败结论必须由显式字段或文档证据支撑。"
+            ]
+        if scenario_id in {12, 13}:
+            return [
+                "现象/竞品与结构化样品之间没有专用实体映射；向量证据只作主题证据，"
+                "不得直接视为某条 MySQL 记录。"
+            ]
+        return list(mysql_result.get("warnings") or [])
+
+    def _synthesize(
+        self,
+        *,
+        message: str,
+        frame,
+        source_relation: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
         emit_progress(
             "llm_synthesis",
             "running",
@@ -556,6 +631,7 @@ class HybridResearchQASkill:
 6. 相关性不得写成因果。
 7. 最终回答包含：结论、证据依据、风险/缺口。不要暴露内部表名、SQL、凭证或向量服务地址。
 8. selection.omitted_records 大于 0 时，不得推断被省略证据的内容。
+9. source_relation.level 不是 ENTITY_LINKED 时，不得把向量文档写成同一样品、实验或配方的结构化事实。
 回答中文，结构简洁。
 """
         attempts: list[dict[str, Any]] = []
@@ -565,6 +641,12 @@ class HybridResearchQASkill:
                 frame=frame,
                 query=message,
                 aggressive=aggressive,
+            )
+            context["source_relation"] = source_relation
+            serialized = json.dumps(
+                context,
+                ensure_ascii=False,
+                default=str,
             )
             user = (
                 f"用户问题：{message}\n\n"

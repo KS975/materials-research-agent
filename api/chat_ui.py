@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from agent.deepseek_intent_router import DeepSeekIntentRouter
+from agent.intent_v2 import DeepSeekIntentDecision, IntentToolPlanStep
 from agent.multi_condition import looks_like_multi_condition_request
 from api.chat import resolve_user_context
 from app.container import ApplicationContainer, get_container
@@ -278,7 +279,10 @@ def _looks_like_hybrid_research(
     )
     has_structured = any(
         marker in text.casefold()
-        for marker in ("mysql", "数据库", "样品", "配方", "工艺", "性能", "实验", "项目")
+        for marker in (
+            "mysql", "数据库", "样品", "配方", "工艺", "性能", "实验", "项目",
+            "研发上下文", "内部",
+        )
     )
     has_join = any(
         marker in text
@@ -295,6 +299,29 @@ def _looks_like_hybrid_research(
         has_non_structured
         and has_structured
         and (has_join or has_retrieval or bool(attachment_ids))
+    )
+
+
+def _deterministic_hybrid_research_decision() -> DeepSeekIntentDecision:
+    return DeepSeekIntentDecision(
+        domain="knowledge",
+        primary_intent="hybrid_research_qa",
+        tool_name=None,
+        tool_args={},
+        scope={"company": "current", "projects": "all_authorized"},
+        constraints={"read_only": True, "unified_evidence_frame": True},
+        tool_plan=(
+            IntentToolPlanStep(
+                kind="workflow",
+                name="hybrid_research_qa",
+                args={},
+                purpose="并行召回 MySQL、向量、上传与对话输入并统一 EvidenceFrame",
+            ),
+        ),
+        reasoning_summary=(
+            "已由后端确定性识别为跨来源研究问题；槽位由 Hybrid Workflow 安全校验和兜底解析。"
+        ),
+        router_version="hybrid-deterministic-v1",
     )
 
 
@@ -884,23 +911,33 @@ def _plan_chat_ui_semantic(state: dict[str, Any]) -> dict[str, Any]:
             "DeepSeek 语义路由",
             "正在结合当前问题和对话上下文提取业务意图。",
         )
-        decision = engine.route(
+        explicit_hybrid_research = _looks_like_hybrid_research(
             body.message,
-            history,
-            attachment_meta,
-            field_catalog=field_catalog,
-            database_explorer_enabled=database_explorer_enabled,
-            database_explorer_mode=str(
-                getattr(database_explorer_skill, "mode", "off")
-            ),
-            engine_workflow_enabled=bool(
-                getattr(container.settings, "engine_workflow_enabled", False)
-            ),
-            engine_optimization_route=str(
-                getattr(container.settings, "engine_optimization_route", "legacy")
-            ),
+            body.attachment_ids,
         )
-        router_name = "deepseek"
+        decision = (
+            _deterministic_hybrid_research_decision()
+            if explicit_hybrid_research
+            else engine.route(
+                body.message,
+                history,
+                attachment_meta,
+                field_catalog=field_catalog,
+                database_explorer_enabled=database_explorer_enabled,
+                database_explorer_mode=str(
+                    getattr(database_explorer_skill, "mode", "off")
+                ),
+                engine_workflow_enabled=bool(
+                    getattr(container.settings, "engine_workflow_enabled", False)
+                ),
+                engine_optimization_route=str(
+                    getattr(container.settings, "engine_optimization_route", "legacy")
+                ),
+            )
+        )
+        router_name = (
+            "hybrid_deterministic" if explicit_hybrid_research else "deepseek"
+        )
         summary = decision.reasoning_summary
         intent, tool_name, tool_args = decision.intent, decision.tool_name, decision.tool_args
         routing_meta = decision.to_routing_meta()
@@ -1191,7 +1228,7 @@ def _execute_semantic_rag(state: dict[str, Any]) -> ChatUIResponse:
                 status_code=500,
                 detail=f"混合研究问答失败：{type(exc).__name__}: {exc}",
             ) from exc
-        response_args = args
+        response_args = result.get("resolved_tool_args") or args
     elif intent == "sample_historical_similarity":
         args = _resolve_sample_history_args(tool_args, ctx)
         try:
@@ -2273,7 +2310,7 @@ def _execute_chat_ui_legacy(
             answer=result.get("answer", ""),
             intent=intent,
             tool_name=None,
-            tool_args=args,
+            tool_args=result.get("resolved_tool_args") or args,
             data=result,
             evidence=result.get("evidence", []),
             warnings=result.get("warnings", []),

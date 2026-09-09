@@ -106,10 +106,28 @@ def test_natural_similarity_phrases_map_to_similarity_workflow() -> None:
         "查找与 EXP-128 相似的配方，并结合历史案例。",
         "找与 EXP-128 类似的样品。",
         "查与 EXP-128 相近的实验。",
+        "找与 EXP-128 配方相近的历史样品，并结合历史资料。",
+        "查组分和 EXP-128 最接近的配方，并结合历史资料。",
+        "找与 EXP-128 工艺最像的样品，并结合历史资料。",
+        "查找和 EXP-128 配方性能都接近的历史样品，并结合资料。",
     ):
         plan = resolve_research_scenario(message)
         assert plan["workflow_id"] == "hybrid_search_rank"
         assert plan["scenario_id"] in {1, 2}
+
+
+def test_similarity_target_distinguishes_formula_and_combined_search() -> None:
+    assert resolve_research_scenario("找与 EXP-128 配方相近的历史样品")["scenario_id"] == 1
+    assert resolve_research_scenario("查组分和 EXP-128 最接近的配方")["scenario_id"] == 1
+    assert resolve_research_scenario("找与 EXP-128 工艺最像的样品")["scenario_id"] == 2
+    assert resolve_research_scenario("查找和 EXP-128 配方性能都接近的历史样品")["scenario_id"] == 2
+
+
+def test_stage3_priority_rules_prevent_identifier_and_filter_hijacking() -> None:
+    assert resolve_research_scenario("查找密度差大于 150 的样品，并结合历史案例。")["scenario_id"] == 3
+    assert resolve_research_scenario("使用水的样品性能怎么样？结合历史资料判断。")["scenario_id"] == 5
+    assert resolve_research_scenario("查找 P507+煤油 替代 水的历史记录，并结合历史资料。")["scenario_id"] == 6
+    assert resolve_research_scenario("以前类似萃取配方路线为什么失败？结合历史案例。")["scenario_id"] == 7
 
 
 def test_filters_take_precedence_over_numeric_identifier_in_scenario_3() -> None:

@@ -91,3 +91,28 @@ def test_evidence_frame_preserves_conflicts_instead_of_selecting_one_side():
         for record in frame.records
         if record.record_id in conflict.record_ids
     )
+
+
+def test_evidence_frame_handles_comparison_diff_sections():
+    builder = EvidenceFrameBuilder(_ctx())
+    builder.add_mysql_result(
+        {
+            "status": "ok",
+            "left_sample": {"id": 128, "name": "EXP-128"},
+            "right_sample": {"id": 129, "name": "EXP-129"},
+            "service_performance_diff": {
+                "changed": [
+                    {
+                        "field": "设备寿命",
+                        "left": 7200,
+                        "right": 7000,
+                        "unit": "h",
+                    }
+                ]
+            },
+        }
+    )
+
+    frame = builder.build()
+    attributes = {record.attribute for record in frame.records}
+    assert "service_performance.设备寿命" in attributes

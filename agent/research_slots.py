@@ -1,0 +1,206 @@
+from __future__ import annotations
+
+import re
+from typing import Any
+
+
+_SUBSTITUTION_REVERSED = re.compile(
+    r"用(?P<replacement>[^，。？?；;]{1,40}?)(?:替换|替代)"
+    r"(?P<original>[^，。？?；;]{1,40})"
+)
+_SUBSTITUTION_DIRECT = re.compile(
+    r"(?P<original>[^，。？?；;]{1,40}?)(?:替代|替换成|替换为|替换)"
+    r"(?P<replacement>[^，。？?；;]{1,40}?)"
+    r"(?:的|历史|记录|配方|性能|，|。|？|$)"
+)
+_EXPLICIT_IDENTIFIER = re.compile(
+    r"(?<![A-Za-z0-9_.-])(?:[A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*|\d{2,})"
+    r"(?![A-Za-z0-9_.-])"
+)
+
+
+def normalize_research_slots(
+    *,
+    message: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    result = dict(args)
+    if not str(result.get("material_name") or "").strip():
+        material = extract_material_name(message)
+        if material:
+            result["material_name"] = material
+    if not (
+        str(result.get("original_material") or "").strip()
+        and str(result.get("replacement_material") or "").strip()
+    ):
+        substitution = extract_substitution_materials(message)
+        if substitution is not None:
+            result["original_material"], result["replacement_material"] = substitution
+    if not str(result.get("competitor_name") or "").strip():
+        competitor = extract_competitor_name(message)
+        if competitor:
+            result["competitor_name"] = competitor
+    if not str(result.get("phenomenon") or "").strip():
+        phenomenon = extract_phenomenon(message)
+        if phenomenon:
+            result["phenomenon"] = phenomenon
+    if not str(result.get("identifier") or "").strip():
+        identifier = extract_identifier(message)
+        if identifier:
+            result["identifier"] = identifier
+    if not isinstance(result.get("filters"), list) or not result["filters"]:
+        parsed_filters = parse_target_filters(message)
+        if parsed_filters:
+            result["filters"] = parsed_filters
+    return result
+
+
+def extract_material_name(message: str) -> str | None:
+    text = str(message or "").strip()
+    patterns = (
+        r"(?:查询|查找|查)?\s*(?P<material>[^，。？?；;]{1,40}?)的原料使用效果",
+        r"使用(?P<material>[^，。？?；;]{1,40}?)(?:的)?(?:样品|性能|原料)",
+        r"(?P<material>[^，。？?；;]{1,40}?)(?:用在哪些|用量多少)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        material = _clean_material(match.group("material"))
+        if material:
+            return material
+    return None
+
+
+def extract_substitution_materials(message: str) -> tuple[str, str] | None:
+    text = str(message or "").strip()
+    listed = re.search(
+        r"[：:](?P<original>[^，。；;]{1,40}?)和(?P<replacement>[^，。；;]{1,40}?)"
+        r"(?:，|。|？|并结合|$)",
+        text,
+    )
+    if listed and ("替代" in text or "替换" in text):
+        original = _clean_material(listed.group("original"))
+        replacement = _clean_material(listed.group("replacement"))
+        if original and replacement:
+            return original, replacement
+    reversed_match = _SUBSTITUTION_REVERSED.search(text)
+    if reversed_match:
+        original = _clean_material(reversed_match.group("original"))
+        replacement = _clean_material(reversed_match.group("replacement"))
+        if original and replacement:
+            return original, replacement
+    direct_match = _SUBSTITUTION_DIRECT.search(text)
+    if direct_match:
+        original = _clean_material(direct_match.group("original"))
+        replacement = _clean_material(direct_match.group("replacement"))
+        if original and replacement:
+            return original, replacement
+    return None
+
+
+def extract_competitor_name(message: str) -> str | None:
+    match = re.search(
+        r"竞品\s*(?P<name>[A-Za-z0-9][A-Za-z0-9./+＋ -]{0,60})",
+        str(message or ""),
+    )
+    if not match:
+        return None
+    return match.group("name").strip() or None
+
+
+def extract_phenomenon(message: str) -> str | None:
+    text = str(message or "")
+    for phenomenon in (
+        "粘接失效", "粘接失败", "开裂", "析出", "变色", "老化", "失效",
+    ):
+        if phenomenon in text:
+            return phenomenon
+    return None
+
+
+def extract_identifier(message: str) -> str | None:
+    found = _EXPLICIT_IDENTIFIER.findall(str(message or ""))
+    return str(found[-1]) if len(found) == 1 else None
+
+
+def parse_target_filters(message: str) -> list[dict[str, Any]]:
+    text = str(message or "")
+    filters: list[dict[str, Any]] = []
+    operator_pattern = (
+        r"(?P<field>[^，。；：:]{1,50}?)"
+        r"(?P<operator>大于等于|小于等于|大于|小于|高于|低于|不低于|不高于|至少|至多)"
+        r"\s*(?P<value>\d+(?:\.\d+)?)"
+    )
+    operators = {
+        "大于等于": "gte",
+        "小于等于": "lte",
+        "大于": "gt",
+        "小于": "lt",
+        "高于": "gt",
+        "低于": "lt",
+        "不低于": "gte",
+        "不高于": "lte",
+        "至少": "gte",
+        "至多": "lte",
+    }
+    for match in re.finditer(operator_pattern, text):
+        field = _clean_filter_field(match.group("field"))
+        if not field:
+            continue
+        filters.append(
+            {
+                "section": "performance",
+                "field": field,
+                "operator": operators[match.group("operator")],
+                "value": _number(match.group("value")),
+            }
+        )
+
+    between = re.search(
+        r"(?P<field>[^，。；：:]{1,50}?)在\s*(?P<low>\d+(?:\.\d+)?)"
+        r"\s*(?:到|至)\s*(?P<high>\d+(?:\.\d+)?)\s*(?:之间|以内)",
+        text,
+    )
+    if between:
+        field = _clean_filter_field(between.group("field"))
+        if field:
+            filters.append(
+                {
+                    "section": "performance",
+                    "field": field,
+                    "operator": "between",
+                    "values": [
+                        _number(between.group("low")),
+                        _number(between.group("high")),
+                    ],
+                }
+            )
+    return filters
+
+
+def _clean_material(value: str) -> str:
+    text = str(value or "").strip()
+    for prefix in ("查找", "查询", "有没有用", "请查", "查", "使用"):
+        while text.startswith(prefix):
+            text = text[len(prefix) :].strip()
+    for suffix in ("的配方记录", "配方记录", "的配方", "的", "配方", "记录", "历史", "样品"):
+        while text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+    return text.strip(" ：:，,。？?；;")
+
+
+def _clean_filter_field(value: str) -> str | None:
+    text = str(value or "").strip()
+    for separator in (
+        "新项目", "冷启动", "目标", "要求", "查找", "筛选", "且", "并且",
+    ):
+        if separator in text:
+            text = text.rsplit(separator, 1)[-1].strip()
+    text = text.strip(" ：:，,。；;？?的")
+    return text or None
+
+
+def _number(value: str) -> int | float:
+    number = float(value)
+    return int(number) if number.is_integer() else number

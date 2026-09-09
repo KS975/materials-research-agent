@@ -599,6 +599,7 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
         # sample+history analysis, even if the LLM tries to reduce it to a
         # generic RAG search.
         forced_history_intent = None
+        deterministic_hybrid_intent = False
         if (hints.scope_only_followup or hints.scope_reset_followup) and hints.active_history_task:
             forced_history_intent = hints.active_history_task
         elif hints.current_history_request:
@@ -633,6 +634,7 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
                     if intent == "hybrid_research_qa"
                     else _EXPECTED_TOOL_BY_INTENT[intent]
                 )
+                deterministic_hybrid_intent = intent == "hybrid_research_qa"
 
         args = data.get("tool_args") or data.get("arguments") or {}
         if not isinstance(args, dict):
@@ -801,9 +803,12 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
         model_needs_clarification = bool(data.get("needs_clarification", False))
         missing = self._missing_required_args(intent, args)
         needs_clarification = (
-            model_needs_clarification
-            or bool(missing)
-            or bool(filter_validation_errors)
+            (
+                model_needs_clarification
+                or bool(missing)
+                or bool(filter_validation_errors)
+            )
+            and not deterministic_hybrid_intent
         )
         clarification_question = str(data.get("clarification_question") or "").strip()
         if filter_validation_errors:

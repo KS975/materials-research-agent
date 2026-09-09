@@ -182,6 +182,16 @@ def resolve_research_scenario(
 def looks_like_hybrid_research_request(message: str) -> bool:
     """Recognize stage-3 questions that require joined source reasoning."""
     text = str(message or "").strip()
+    if _looks_like_similarity_phrase(text):
+        return True
+    if _looks_like_failure_request(text):
+        return True
+    if _looks_like_material_usage_request(text):
+        return True
+    if _looks_like_material_substitution_request(text):
+        return True
+    if _looks_like_target_filter_request(text):
+        return True
     markers = (
         "历史资料", "历史案例", "知识库", "向量库", "结合历史", "综合历史",
         "相似配方", "相似的配方", "类似配方", "类似的配方", "相近配方", "相近的配方",
@@ -206,20 +216,16 @@ def _requested_scenario_id(args: Mapping[str, Any]) -> int | None:
 def _classify_message(text: str, args: Mapping[str, Any]) -> int:
     if any(marker in text for marker in ("新项目冷启动", "新项目立项", "首轮方案", "从零开始")):
         return 14
-    if (
-        any(marker in text for marker in ("替代", "替换"))
-        and any(marker in text for marker in ("原料", "材料", "牌号", "供应商"))
-    ) or (
+    if "为什么" in text and "停用" in text:
+        return 17
+    if _looks_like_material_substitution_request(text) or (
         args.get("original_material")
         and args.get("replacement_material")
     ):
         return 6
-    if args.get("material_name") or any(
-        marker in text
-        for marker in ("使用效果", "用在哪些", "用过哪些", "用量多少")
-    ):
+    if args.get("material_name") or _looks_like_material_usage_request(text):
         return 5
-    if any(marker in text for marker in ("失败配方", "失败实验", "失败案例", "失败路线")):
+    if _looks_like_failure_request(text):
         return 7
     if any(
         marker in text
@@ -228,20 +234,74 @@ def _classify_message(text: str, args: Mapping[str, Any]) -> int:
         return 12
     if any(marker in text for marker in ("竞品", "对标")):
         return 13
+    if _looks_like_target_filter_request(text):
+        return 3
     if isinstance(args.get("filters"), list) and args["filters"]:
         return 3
-    if any(marker in text for marker in ("相似配方", "相似的配方", "类似配方", "类似的配方", "相近配方", "相近的配方")):
-        return 1
-    if any(marker in text for marker in (
-        "相似样品", "相似的样品", "类似样品", "类似的样品", "相近样品", "相近的样品",
-        "相似实验", "相似的实验", "类似实验", "类似的实验", "相近实验", "相近的实验",
-    )):
-        return 2
+    if _looks_like_similarity_phrase(text):
+        return _similarity_target(text)
     if _EXPLICIT_IDENTIFIER.search(text) or args.get("identifier"):
         return 4
     if any(marker in text for marker in ("项目知识", "项目问答", "为什么停用", "去年")):
         return 17
     return 1
+
+
+def _looks_like_similarity_phrase(text: str) -> bool:
+    similarity_markers = ("相似", "类似", "相近", "最像", "最接近", "接近")
+    domain_markers = (
+        "配方", "组分", "组成", "原料", "样品", "样本", "实验",
+        "工艺", "流程", "加工", "条件", "性能",
+    )
+    return any(marker in text for marker in similarity_markers) and any(
+        marker in text for marker in domain_markers
+    )
+
+
+def _looks_like_failure_request(text: str) -> bool:
+    return "失败" in text and any(
+        marker in text for marker in ("配方", "实验", "路线", "案例", "调整")
+    )
+
+
+def _looks_like_material_usage_request(text: str) -> bool:
+    if any(
+        marker in text
+        for marker in ("使用效果", "用在哪些", "用过哪些", "用量多少")
+    ):
+        return True
+    return "使用" in text and "样品" in text and any(
+        marker in text for marker in ("性能", "怎么样", "效果")
+    )
+
+
+def _looks_like_material_substitution_request(text: str) -> bool:
+    if "替代" not in text and "替换" not in text:
+        return False
+    return any(
+        marker in text for marker in ("原料", "材料", "牌号", "供应商")
+    ) or bool(re.search(r"[A-Za-z0-9][^，。？?]{0,30}(?:替代|替换)", text))
+
+
+def _looks_like_target_filter_request(text: str) -> bool:
+    operators = (
+        "大于等于", "小于等于", "大于", "小于", "高于", "低于",
+        "不低于", "不高于", "至少", "至多", "介于", ">=", "<=", ">", "<",
+    )
+    collections = ("样品", "样本", "实验", "方案", "配方", "工艺")
+    return any(operator in text for operator in operators) and any(
+        marker in text for marker in collections
+    )
+
+
+def _similarity_target(text: str) -> int:
+    # A formula search is scenario 1 even when the returned rows are samples.
+    # Process, experiment, and combined condition searches are scenario 2.
+    if "性能" in text:
+        return 2
+    if any(marker in text for marker in ("配方", "组分", "组成", "原料")):
+        return 1
+    return 2
 
 
 def _workflow_id_for_scenario(scenario_id: int) -> str:

@@ -247,7 +247,7 @@ class EvidenceFrameBuilder:
         # Keep left/right values addressable when a comparison contains both.
         prefix = "left" if key == "left_sample" else "right"
         for section in _FIELD_SECTIONS:
-            diff = payload.get(f"{_short_section(section)}_diff") or payload.get(
+            diff = payload.get(f"{self._short_section(section)}_diff") or payload.get(
                 f"{section}_diff"
             )
             if not isinstance(diff, Mapping):

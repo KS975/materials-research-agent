@@ -33,8 +33,10 @@ class EvidenceContextCompressor:
         query: str,
         aggressive: bool = False,
     ) -> tuple[dict[str, Any], str]:
-        record_limit = max(10, self.max_records // 2 if aggressive else self.max_records)
-        char_limit = max(3_000, self.max_chars // 2 if aggressive else self.max_chars)
+        record_divisor = 4 if aggressive else 1
+        char_divisor = 4 if aggressive else 1
+        record_limit = max(10, self.max_records // record_divisor)
+        char_limit = max(3_000, self.max_chars // char_divisor)
         selected = self._select_records(frame, query=query, record_limit=record_limit)
         context: dict[str, Any] = {
             "schema_version": 1,

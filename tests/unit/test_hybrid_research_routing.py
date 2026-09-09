@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from agent.deepseek_intent_router import DeepSeekIntentRouter
+from api.chat_ui import _looks_like_hybrid_research
 
 
 class FakeLLM:
@@ -39,3 +40,14 @@ def test_hybrid_research_intent_is_no_tool_and_fixed_workflow():
     routing = decision.to_routing_meta()
     assert routing["tool_plan"][0]["kind"] == "workflow"
     assert routing["tool_plan"][0]["name"] == "hybrid_research_qa"
+
+
+def test_hybrid_research_recognizes_profile_and_internal_case_phrases():
+    assert _looks_like_hybrid_research(
+        "查 EXP-128 的完整研发上下文，并结合历史资料综合判断。",
+        [],
+    )
+    assert _looks_like_hybrid_research(
+        "查粘接失效类似案例，并结合内部资料。",
+        [],
+    )
