@@ -48,6 +48,29 @@ PLATFORM_TRUST_FORWARDED_HEADERS=false
 结构化登录状态（如 `accessToken`、`selectCompany`）。如果单位平台使用了非标准
 存储键，可通过同源页面在加载智能体前提供：
 
+当前已按平台约定直接支持以下缓存键：
+
+```text
+token       平台登录 Token
+company_Id  当前公司 ID
+```
+
+同时兼容 `accessToken/access_token/matcloud_token`、`companyId/company_id`
+以及结构化登录对象中的 Token / companyId 字段。存储键大小写不敏感。请求链路固定为：
+
+```text
+浏览器缓存 token + company_Id
+  ↓
+前端仅对同源 /agent-api/ 附加 Authorization 与 Company-Id
+  ↓
+后端解析 UserContext，并把 Authorization 保存在请求级 ContextVar
+  ↓
+search_vector_knowledge 调用外部向量 API
+```
+
+生产环境中，外部向量查询参数 `companyId` 默认等于后端 `UserContext.company_id`。
+`EXTERNAL_VECTOR_QUERY_COMPANY_ID` 只允许测试环境显式使用；生产必须留空。
+
 ```javascript
 window.__MATCLOUD_REQUEST_HEADERS__ = {
   authorization: "Bearer <当前登录 Token>",

@@ -1,4 +1,18 @@
 const SAME_ORIGIN_API_PREFIX = "/agent-api/";
+const TOKEN_STORAGE_KEYS = [
+  "accessToken",
+  "access_token",
+  "matcloud_token",
+  "token",
+];
+const COMPANY_STORAGE_KEYS = [
+  "company_Id",
+  "companyId",
+  "company_id",
+  "company-id",
+  "selectCompanyId",
+  "select_company_id",
+];
 
 function safeUrl(url) {
   try {
@@ -34,9 +48,11 @@ function normalizeHeaders(value) {
   return output;
 }
 
-function findLoginValue(storage, preferredNames) {
-  const preferred = new Set(preferredNames.map(normalizeHeaderName));
-  let direct = null;
+function findLoginValue(storage) {
+  const tokenKeys = new Set(TOKEN_STORAGE_KEYS.map(normalizeHeaderName));
+  const companyKeys = new Set(COMPANY_STORAGE_KEYS.map(normalizeHeaderName));
+  let directToken = null;
+  let directCompany = null;
   let structuredToken = null;
   let structuredCompany = null;
 
@@ -52,7 +68,8 @@ function findLoginValue(storage, preferredNames) {
     }
     if (!value) continue;
 
-    if (preferred.has(key)) direct = value;
+    if (tokenKeys.has(key)) directToken = value;
+    if (companyKeys.has(key)) directCompany = value;
 
     let parsed = null;
     try {
@@ -84,10 +101,17 @@ function findLoginValue(storage, preferredNames) {
     }
   }
 
+  // The platform's explicit plain keys win over values discovered inside
+  // unrelated structured login objects.
+  const token = directToken || structuredToken;
+  const authorization = token
+    ? token.toString().trim().startsWith("Bearer ")
+      ? token.toString().trim()
+      : `Bearer ${token.toString().trim()}`
+    : "";
   return {
-    authorization: structuredToken ? `Bearer ${structuredToken}` : "",
-    "company-id": structuredCompany || "",
-    direct,
+    authorization,
+    "company-id": directCompany || structuredCompany || "",
   };
 }
 
@@ -123,18 +147,8 @@ export function platformRequestHeaders() {
     };
   }
 
-  const local = findLoginValue(window.localStorage, [
-    "accessToken",
-    "access_token",
-    "matcloud_token",
-    "token",
-  ]);
-  const session = findLoginValue(window.sessionStorage, [
-    "accessToken",
-    "access_token",
-    "matcloud_token",
-    "token",
-  ]);
+  const local = findLoginValue(window.localStorage);
+  const session = findLoginValue(window.sessionStorage);
   const authorization = local.authorization || session.authorization;
   const companyId = local["company-id"] || session["company-id"];
   if (!authorization || !companyId) return {};
