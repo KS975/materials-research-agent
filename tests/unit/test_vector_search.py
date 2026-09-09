@@ -191,6 +191,39 @@ def test_external_vector_all_query_keeps_zero_score_hits():
     assert result["hits"][0]["score"] == 0.0
 
 
+def test_external_vector_test_scope_separates_header_and_query_company():
+    gateway = FakeGateway(
+        [
+            {
+                "point_id": "test-file-1",
+                "score": 0.9,
+                "text": "authorized test document",
+                "metadata": {"company_id": "test-company-id"},
+            }
+        ],
+        provider="external_vector_api",
+    )
+    service = VectorSearchService(
+        gateway=gateway,
+        external_query_company_id="test-company-id",
+    )
+    ctx = UserContext(
+        user_id="platform-user",
+        company_id="platform-company-a",
+        project_ids=(),
+        all_projects=True,
+        permission_source="test",
+    )
+
+    result = service.search(query="食品添加剂", ctx=ctx, limit=5)
+
+    assert gateway.requests[0]["company_id"] == "test-company-id"
+    assert gateway.requests[0]["header_company_id"] == "platform-company-a"
+    assert result["hit_count"] == 1
+    assert result["hits"][0]["metadata"]["company_id"] == "test-company-id"
+    assert any("测试数据范围" in warning for warning in result["warnings"])
+
+
 def test_external_gateway_always_sends_required_query_text():
     captured = {}
 

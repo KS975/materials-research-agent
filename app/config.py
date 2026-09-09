@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     )
     external_vector_api_timeout: float = 15.0
     external_vector_api_filter_user_id: bool = False
+    # Test-only data scope. The platform login company remains in Company-Id;
+    # this value changes only the external service's companyId query filter.
+    external_vector_query_company_id: str = ""
 
     # V0.1.2 T06: historical RAG retrieval guardrails
     knowledge_rag_score_threshold: float = 0.42

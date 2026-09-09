@@ -242,6 +242,7 @@ class VectorSearchService:
     default_limit: int = 5
     default_score_threshold: float = 0.42
     filter_by_user: bool = False
+    external_query_company_id: str = ""
 
     def search(
         self,
@@ -281,6 +282,7 @@ class VectorSearchService:
                 raise PermissionError("当前用户没有可用于向量检索的项目权限")
 
         scope_warnings: list[str] = []
+        query_company_id = str(ctx.company_id)
         if is_external_api:
             # The confirmed service filters by company and optionally by
             # organization/user. It does not expose a project dimension.
@@ -289,10 +291,19 @@ class VectorSearchService:
                     "外部向量 API 不支持项目维度过滤，本次按公司授权范围检索。"
                 )
             projects = []
+            configured_query_company = str(
+                self.external_query_company_id or ""
+            ).strip()
+            if configured_query_company:
+                query_company_id = configured_query_company
+                scope_warnings.append(
+                    "外部向量测试数据范围已启用：请求头保持当前登录公司，"
+                    f"向量 companyId 查询范围为 {configured_query_company}。"
+                )
 
         request = {
             "query": normalized_query,
-            "company_id": ctx.company_id,
+            "company_id": query_company_id,
             "project_ids": [] if is_external_api else projects,
             "all_projects": bool(all_projects and not is_external_api),
             "limit": normalized_limit,
@@ -320,7 +331,10 @@ class VectorSearchService:
             if not valid_score or (normalized_query and score < threshold):
                 low_score += 1
                 continue
-            if company_id is None or str(company_id) != str(ctx.company_id):
+            expected_company_id = (
+                str(query_company_id) if is_external_api else str(ctx.company_id)
+            )
+            if company_id is None or str(company_id) != expected_company_id:
                 rejected += 1
                 continue
             if not all_projects:

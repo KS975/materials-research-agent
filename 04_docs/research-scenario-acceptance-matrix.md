@@ -80,3 +80,15 @@ tests/unit/test_hybrid_research_routing.py
 | 查找密度差大于 100 且持液量小于 0.1 的历史样品，并结合历史资料 | 通过 | 命中场景 3 / `structured_multi_condition_filter`；返回 50 条候选、200 条 MySQL 证据 |
 
 向量侧当前仍为 legacy Qdrant 配置，缺少 `EMBEDDING_BASE_URL`，因此所有真实冒烟均显式输出 `vector_unavailable` 和证据缺口警告，未用推测补齐。这不属于 MySQL 链路失败；启用外部向量 API 需要部署配置 `VECTOR_SEARCH_PROVIDER=external_api`、正式 endpoint 和平台请求凭证。
+
+## 6. 2026-09-09 外部向量真实链路补充冒烟
+
+本地运行时已切换为 `VECTOR_SEARCH_PROVIDER=external_api`。测试数据范围通过 `EXTERNAL_VECTOR_QUERY_COMPANY_ID=test-company-id` 显式配置：请求头 `Company-Id` 保持当前登录公司，向量查询参数 `companyId` 指向授权测试数据公司。生产环境该覆盖项必须留空。
+
+| 用例 | 结果 | 记录 |
+|---|---|---|
+| 直接调用受管 `search_vector_knowledge` | 通过 | `provider=external_vector_api`，命中 5 条，score 约 0.543-0.664 |
+| Hybrid Research QA 证据链 | 通过 | MySQL `ok`，外部向量 `ok`；EvidenceFrame 来源计数 `mysql=200`、`vector_api=5`、`dialog=1` |
+| 平台登录公司校验 | 通过 | Token 所属公司与 Header 公司一致，项目模式为 `company_all_projects` |
+
+本轮真实 LLM 综述出现一次 `ReadTimeout`；使用固定摘要器复跑证明 MySQL、外部向量与 EvidenceFrame 链路本身正常。该超时记录为 LLM 服务稳定性问题，不用推测填补证据。

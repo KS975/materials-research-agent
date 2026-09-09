@@ -109,6 +109,11 @@ class ApplicationContainer:
             default_limit=settings.knowledge_rag_max_hits,
             default_score_threshold=settings.knowledge_rag_score_threshold,
             filter_by_user=settings.external_vector_api_filter_user_id,
+            external_query_company_id=(
+                settings.external_vector_query_company_id
+                if settings.vector_search_provider == "external_api"
+                else ""
+            ),
         )
         register_vector_tools(self.registry, VectorSearchTool(self.vector_search_service))
         self.engine_workflow_adapter = EngineWorkflowAdapter(
