@@ -32,6 +32,7 @@ import MarkdownView, { CopyControl } from "./MarkdownView";
 import {EngineTaskCard,EngineWorkflowCard} from "./EngineWorkflowCards";
 import {engineTaskIsTerminal} from "./engineWorkflow";
 import EvidenceFrameCard from "./EvidenceFrameCard";
+import ResearchScenarioCard from "./ResearchScenarioCard";
 
 const quick=[
   {label:"单位真实数据",text:"查看单位真实数据概况",type:"chat"},
@@ -767,7 +768,7 @@ function Message({m,scope,onEngineTaskAction}){
     <div className="avatar">{m.role==="assistant"?<Logo/>:"你"}</div>
     <div className="msgcol">
       <small>{m.role==="assistant"?"材数智能体":"你"}</small>
-<div className="bubble">{(m.pending||m.progress?.length>0)&&<AnalysisProgress steps={m.progress||[]} live={!!m.pending}/>}<EngineTaskCard task={m.engineTask} disabled={!onEngineTaskAction} onAction={action=>onEngineTaskAction?.(m.id,m.engineTask?.task_id,action)}/> {!isV020Feedback&&!isV030Autonomy&&m.content&&<div className="content">{m.role==="assistant"?<MarkdownView content={m.content}/>:m.content}</div>}<EvidenceFrameCard status={m.data?.status} frame={m.data?.evidence_frame} evidence={m.evidence} intent={m.meta?.intent} warnings={m.data?.warnings}/><EngineWorkflowCard data={m.data}/><ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/>{showAnswerActions&&<div className="answerActions"><CopyControl value={m.content} label="复制答案"/></div>}<Detail m={m}/></div>
+<div className="bubble">{(m.pending||m.progress?.length>0)&&<AnalysisProgress steps={m.progress||[]} live={!!m.pending}/>}<EngineTaskCard task={m.engineTask} disabled={!onEngineTaskAction} onAction={action=>onEngineTaskAction?.(m.id,m.engineTask?.task_id,action)}/> {!isV020Feedback&&!isV030Autonomy&&m.content&&<div className="content">{m.role==="assistant"?<MarkdownView content={m.content}/>:m.content}</div>}<EvidenceFrameCard status={m.data?.status} frame={m.data?.evidence_frame} evidence={m.evidence} intent={m.meta?.intent} warnings={m.data?.warnings}/><ResearchScenarioCard data={m.data} warnings={m.data?.warnings}/><EngineWorkflowCard data={m.data}/><ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/>{showAnswerActions&&<div className="answerActions"><CopyControl value={m.content} label="复制答案"/></div>}<Detail m={m}/></div>
     </div>
   </div>
 }
