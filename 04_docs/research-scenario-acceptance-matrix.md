@@ -2,7 +2,7 @@
 
 更新日期：2026-09-09
 基线分支：`codex/structure-adaptation`  
-当前实现：阶段三只读研究场景已通过；阶段四分析与报告场景已完成真实 MySQL + 外部向量 + LLM 引用链路验收；阶段五仅保留固定 Workflow 分类和边界。
+当前实现：阶段三只读研究场景已通过；阶段四分析与报告场景已完成真实 MySQL + 外部向量 + LLM 引用链路验收。阶段五按展示版调整范围执行：场景15做对话匹配，场景16条件性实现，场景19只留接口，场景20只读查询。
 
 ## 1. 执行状态定义
 
@@ -12,8 +12,9 @@
 | `READY_FOR_REAL_DATA` | 代码链路已开放，等待用当前公司真实 MySQL / 向量数据做人工验收 |
 | `REAL_DATA_PASS` | 已完成本切片规定数量的真实问题验收；MySQL、外部向量、EvidenceFrame 与 LLM 综述均通过 |
 | `REAL_DATA_INFRA_GAP` | 路由、槽位、MySQL、外部向量与 EvidenceFrame 已通过，但部分问题被外部 LLM 服务权限阻断 |
-| `PLANNED_STAGE_4` | 属于分析与报告场景，本轮不执行，不输出伪结论 |
-| `PLANNED_STAGE_5` | 涉及写入、审批、回流或跨项目资产，本轮不执行 |
+| `DISPLAY_SCOPED` | 展示版简化实现，不涉及正式写入、审批或回流闭环 |
+| `CONDITIONAL_QUERY` | 仅在已有结构化特征值时做查询展示；需图像识别时明确降级 |
+| `INTERFACE_RESERVED` | 展示版只预留接口，不做正式实现，不伪装已交付 |
 
 外部向量结果依赖 `VECTOR_SEARCH_PROVIDER=external_api`、平台请求凭证和该公司已入库数据。向量源不可用时系统保留证据缺口，不会用推测补齐。
 
@@ -35,12 +36,12 @@
 | 12 | 异常与失效案例检索 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 查开裂案例；析出或变色历史；粘接失效类似案例 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
 | 13 | 竞品对标 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 与竞品性能差距；历史上哪些路线最接近竞品；竞品关键性能对比 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
 | 14 | 新项目冷启动 | `research_cold_start` | `REAL_DATA_PASS 3/3` | 新项目目标性能给首轮方案；结合历史和失败记录冷启动；有原料限制时从哪开始 | 多条件筛选、相似历史、失败案例、向量证据 | 否 |
-| 15 | 测试结果自动关联样品 | `result_feature_ingestion` | `PLANNED_STAGE_5` | LIMS 结果回样品；检测结果错配发现；自动关联实验与配方 | 结果匹配、特征登记、人工审核 | 是，需审核 |
-| 16 | 图谱 / 曲线结果复用 | `result_feature_ingestion` | `PLANNED_STAGE_5` | DSC 特征参与分析；粒径曲线复用；谱图特征关联样品 | 特征抽取、待审核登记 | 是，需审核 |
+| 15 | 测试结果自动关联样品 | `result_feature_ingestion` | `DISPLAY_SCOPED` | 对话输入检测结果，系统匹配样品/实验/配方，歧义时提示确认 | 编号匹配、歧义检测、待确认建议 | 否，不写数据库 |
+| 16 | 图谱 / 曲线结果复用 | `result_feature_ingestion` | `CONDITIONAL_QUERY` | 查询已有 DSC/TGA/粒径结构化特征；需图像识别时明确降级 | 结构化特征查询、降级提示 | 否，不做图像识别 |
 | 17 | 项目知识快速问答 | `evidence_profile` | `REAL_DATA_PASS 3/3` | 去年做过哪些方案；某原料为什么停用；项目结论和风险是什么 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
 | 18 | 自动生成阶段总结 | `stage_report` | `REAL_DATA_PASS 1/1` | 生成阶段报告；汇总项目进展；形成实验结论和证据链 | 聚合、引用校验、报告生成 | 否 |
-| 19 | 模型版本与实验回流 | `closed_loop_asset` | `PLANNED_STAGE_5` | 新实验回流；比较 Challenger；模型是否晋级 | Dataset 版本、模型治理、审批 | 是，需审批 |
-| 20 | 跨项目复用 | `closed_loop_asset` | `PLANNED_STAGE_5` | 其他项目能否复用模型；复用历史经验；资产授权范围是什么 | Dataset / Model / 报告资产索引 | 是，需审批 |
+| 19 | 模型版本与实验回流 | `closed_loop_asset` | `INTERFACE_RESERVED` | 展示版仅预留入口；触发时返回暂未开放 | 接口占位、明确提示 | 否，不做回流 |
+| 20 | 跨项目复用 | `cross_project_query` | `DISPLAY_SCOPED` | 查其他项目可复用的数据/模型/报告/经验 | 权限校验、只读查询、来源展示 | 否，只读 |
 
 ## 3. 阶段三补充验收口径
 
