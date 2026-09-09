@@ -119,6 +119,8 @@ class Settings(BaseSettings):
     # Test-only data scope. The platform login company remains in Company-Id;
     # this value changes only the external service's companyId query filter.
     external_vector_query_company_id: str = ""
+    # Test-only Header override when no platform browser context is available.
+    external_vector_header_company_id: str = ""
 
     # Hybrid Research QA keeps the full auditable frame in the API response,
     # but sends only a bounded, source-balanced view to the LLM.
@@ -223,6 +225,15 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "生产环境禁止设置 EXTERNAL_VECTOR_QUERY_COMPANY_ID；"
+                "请留空并使用当前登录公司的平台请求头"
+            )
+        if (
+            self.app_env.casefold() in {"production", "prod"}
+            and self.vector_search_provider == "external_api"
+            and self.external_vector_header_company_id.strip()
+        ):
+            raise ValueError(
+                "生产环境禁止设置 EXTERNAL_VECTOR_HEADER_COMPANY_ID；"
                 "请留空并使用当前登录公司的平台请求头"
             )
         if not 1 <= self.tool_audit_retries <= 5:

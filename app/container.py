@@ -115,6 +115,11 @@ class ApplicationContainer:
                 if settings.vector_search_provider == "external_api"
                 else ""
             ),
+            header_company_id_override=(
+                settings.external_vector_header_company_id
+                if settings.vector_search_provider == "external_api"
+                else ""
+            ),
         )
         register_vector_tools(self.registry, VectorSearchTool(self.vector_search_service))
         self.engine_workflow_adapter = EngineWorkflowAdapter(

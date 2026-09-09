@@ -246,6 +246,7 @@ class VectorSearchService:
     default_score_threshold: float = 0.42
     filter_by_user: bool = False
     external_query_company_id: str = ""
+    header_company_id_override: str = ""
 
     def search(
         self,
@@ -314,7 +315,9 @@ class VectorSearchService:
             "acting_user_id": ctx.user_id,
             "user_id": ctx.user_id,
             "header_company_id": (
-                get_request_platform_company_id() or ctx.company_id
+                self.header_company_id_override
+                or get_request_platform_company_id()
+                or ctx.company_id
             ),
             "organization_id": ctx.organization_id,
             "filter_user_id": self.filter_by_user,
