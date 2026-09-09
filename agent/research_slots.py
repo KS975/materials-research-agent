@@ -52,6 +52,12 @@ def normalize_research_slots(
         parsed_filters = parse_target_filters(message)
         if parsed_filters:
             result["filters"] = parsed_filters
+    if not isinstance(result.get("target_metrics"), list) or not result["target_metrics"]:
+        target_metrics = extract_target_metrics(message)
+        if target_metrics:
+            result["target_metrics"] = target_metrics
+        elif str(result.get("target_metric") or "").strip():
+            result["target_metrics"] = [str(result["target_metric"]).strip()]
     return result
 
 
@@ -122,6 +128,32 @@ def extract_phenomenon(message: str) -> str | None:
 def extract_identifier(message: str) -> str | None:
     found = _EXPLICIT_IDENTIFIER.findall(str(message or ""))
     return str(found[-1]) if len(found) == 1 else None
+
+
+def extract_target_metrics(message: str) -> list[str]:
+    text = str(message or "").strip()
+    patterns = (
+        r"哪些(?:关键)?变量影响(?P<target>[^，。；:：？?]{1,50})",
+        r"(?P<target>[^，。；:：？?]{1,50})受哪些(?:关键)?变量影响",
+        r"(?:影响|决定)(?P<target>[^，。；:：？?]{1,50}?)(?:的)?(?:关键变量|关键因素|影响因素|变量|因素)",
+        r"(?P<target>[^，。；:：？?]{1,50}?)(?:的)?(?:关键变量|影响因素)",
+        r"(?P<left>[^，。；:：？?]{1,40}?)(?:和|与|跟)(?P<right>[^，。；:：？?]{1,40}?)(?:为什么|怎么|如何)?(?:冲突|权衡|此消彼长)",
+        r"提高(?P<left>[^，。；:：？?]{1,40}?).*?(?P<right>[^，。；:：？?]{1,40}?)(?:下降|降低)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        if "left" in match.groupdict() and "right" in match.groupdict():
+            left = _clean_target_metric(match.group("left"))
+            right = _clean_target_metric(match.group("right"))
+            if left and right:
+                return [left, right]
+            continue
+        target = _clean_target_metric(match.group("target"))
+        if target:
+            return [target]
+    return []
 
 
 def parse_target_filters(message: str) -> list[dict[str, Any]]:
@@ -197,8 +229,22 @@ def _clean_filter_field(value: str) -> str | None:
     ):
         if separator in text:
             text = text.rsplit(separator, 1)[-1].strip()
+    for prefix in ("查找", "筛选", "找", "目标", "要求", "请"):
+        while text.startswith(prefix):
+            text = text[len(prefix):].strip()
     text = text.strip(" ：:，,。；;？?的")
     return text or None
+
+
+def _clean_target_metric(value: str) -> str:
+    text = str(value or "").strip()
+    for prefix in ("哪些", "什么", "分析", "查看", "查找", "查询", "目标", "要求"):
+        while text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    for suffix in ("性能", "指标", "结果", "的", "为什么会", "为什么"):
+        while text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+    return text.strip(" ：:，,。；;？?的")
 
 
 def _number(value: str) -> int | float:

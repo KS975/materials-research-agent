@@ -59,7 +59,7 @@ RESEARCH_WORKFLOWS: dict[str, dict[str, Any]] = {
     "historical_analysis": {
         "display_name": "历史数据分析",
         "scenario_ids": [8, 10, 11],
-        "execution_status": "PLANNED_STAGE_4",
+        "execution_status": "SUPPORTED",
         "steps": [
             "build_evidence_dataset",
             "key_variable_or_conflict_analysis",
@@ -70,7 +70,7 @@ RESEARCH_WORKFLOWS: dict[str, dict[str, Any]] = {
     "process_window": {
         "display_name": "配方/工艺窗口发现",
         "scenario_ids": [9],
-        "execution_status": "PLANNED_STAGE_4",
+        "execution_status": "SUPPORTED",
         "steps": [
             "build_evidence_dataset",
             "filter_feasible_region",
@@ -81,7 +81,7 @@ RESEARCH_WORKFLOWS: dict[str, dict[str, Any]] = {
     "stage_report": {
         "display_name": "阶段总结生成",
         "scenario_ids": [18],
-        "execution_status": "PLANNED_STAGE_4",
+        "execution_status": "SUPPORTED",
         "steps": [
             "define_project_time_scope",
             "aggregate_experiments_and_results",
@@ -169,11 +169,17 @@ def resolve_research_scenario(
             "hybrid_search_rank",
             "evidence_profile",
             "research_cold_start",
+            "historical_analysis",
+            "process_window",
+            "stage_report",
         },
         "write_policy": "NO_WRITE" if workflow_id in {
             "hybrid_search_rank",
             "evidence_profile",
             "research_cold_start",
+            "historical_analysis",
+            "process_window",
+            "stage_report",
         } else "HUMAN_APPROVAL_REQUIRED",
         "boundary": _boundary_for(workflow_id),
     }
@@ -191,6 +197,8 @@ def looks_like_hybrid_research_request(message: str) -> bool:
     if _looks_like_material_substitution_request(text):
         return True
     if _looks_like_target_filter_request(text):
+        return True
+    if _looks_like_stage4_analysis_request(text):
         return True
     markers = (
         "历史资料", "历史案例", "知识库", "向量库", "结合历史", "综合历史",
@@ -214,6 +222,8 @@ def _requested_scenario_id(args: Mapping[str, Any]) -> int | None:
 
 
 def _classify_message(text: str, args: Mapping[str, Any]) -> int:
+    if _looks_like_stage4_analysis_request(text):
+        return _stage4_scenario(text)
     if any(marker in text for marker in ("新项目冷启动", "新项目立项", "首轮方案", "从零开始")):
         return 14
     if "为什么" in text and "停用" in text:
@@ -294,6 +304,37 @@ def _looks_like_target_filter_request(text: str) -> bool:
     )
 
 
+def _looks_like_stage4_analysis_request(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "关键变量", "影响因素", "影响最大", "多性能冲突", "性能冲突",
+            "冲突分析", "为什么冲突", "怎么冲突", "权衡", "哪些变量", "什么变量", "变量影响",
+            "批次差异", "正常批次", "异常批次",
+            "工艺窗口", "配方窗口", "稳定窗口", "稳定区间", "阶段总结",
+            "阶段报告", "研发阶段报告", "生成报告",
+        )
+    )
+
+
+def _stage4_scenario(text: str) -> int:
+    if any(marker in text for marker in ("阶段总结", "阶段报告", "研发阶段报告", "生成报告")):
+        return 18
+    if any(marker in text for marker in ("工艺窗口", "配方窗口", "稳定窗口", "稳定区间")):
+        return 9
+    if any(marker in text for marker in ("批次差异", "正常批次", "异常批次")):
+        return 11
+    if any(
+        marker in text
+        for marker in (
+            "多性能冲突", "性能冲突", "冲突分析", "为什么冲突", "怎么冲突",
+            "权衡", "为什么下降", "此消彼长",
+        )
+    ):
+        return 10
+    return 8
+
+
 def _similarity_target(text: str) -> int:
     # A formula search is scenario 1 even when the returned rows are samples.
     # Process, experiment, and combined condition searches are scenario 2.
@@ -319,8 +360,8 @@ def _boundary_for(workflow_id: str) -> str:
         "evidence_profile": "画像结论仅覆盖当前授权项目和返回证据，不推断未记录实验。",
         "research_cold_start": "首轮方案仅用于研发起点，正式实验前必须经过可行性与安全审查。",
         "result_feature_ingestion": "结果与特征登记需要人工审核，本阶段仅保留工作流位置。",
-        "historical_analysis": "统计结论必须绑定样本范围、字段和单位；本阶段仅保留工作流位置。",
-        "process_window": "窗口结论必须同时给出可行区间和稳健性；本阶段仅保留工作流位置。",
-        "stage_report": "报告引用必须通过证据校验；本阶段仅保留工作流位置。",
+        "historical_analysis": "统计结论必须绑定样本范围、字段和单位；相关性不得写成因果。",
+        "process_window": "窗口结论必须同时给出可行区间、支撑样本和稳健性，不外推历史可行域。",
+        "stage_report": "报告必须绑定授权范围和证据记录；不得把推测写成已验证结论。",
         "closed_loop_asset": "数据版本、模型晋级和跨项目复用必须人工审批；本阶段仅保留工作流位置。",
     }[workflow_id]

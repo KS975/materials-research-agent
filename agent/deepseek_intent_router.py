@@ -465,9 +465,9 @@ class DeepSeekIntentRouter:
 
 5A) 混合研究问答：
 - hybrid_research_qa，tool_name=null。
-- 用于需要同时综合外部 MySQL、向量知识库、当前附件或对话约束的开放研究问题；例如相似配方、失败案例、竞品对标、新项目冷启动、项目知识问答。
+- 用于需要同时综合外部 MySQL、向量知识库、当前附件或对话约束的开放研究问题；例如相似配方、失败案例、竞品对标、新项目冷启动、项目知识问答、关键变量、性能冲突、批次差异、稳定窗口和阶段总结。
 - 可提取 identifier、left_identifier/right_identifier、filters、keyword、project_id、history_query；信息不足时不要编造。
-- 场景槽位：原料使用效果提取 material_name；原料替代提取 original_material/replacement_material；异常失效提取 phenomenon；竞品对标提取 competitor_name。用户没有明确给出时不要编造。
+- 场景槽位：原料使用效果提取 material_name；原料替代提取 original_material/replacement_material；异常失效提取 phenomenon；竞品对标提取 competitor_name；关键变量/冲突分析提取 target_metrics=[性能字段]；窗口发现提取 filters；批次差异可提取 batch_field 或 batch_groups；阶段报告可提取 project_id/keyword。用户没有明确给出时不要编造。
 - 后端会在一个固定 Workflow 中并行召回并统一 EvidenceFrame；不得拆成“数据库回答 + RAG回答”。
 
 6) Database Explorer 兜底：
@@ -1447,6 +1447,9 @@ preprocess_dataset, train_model, predict_model, optimize_formula, recommend_next
                 "phenomenon",
                 "competitor_name",
                 "filters",
+                "target_metrics",
+                "batch_field",
+                "batch_groups",
                 "logic",
                 "keyword",
                 "similarity_scope",

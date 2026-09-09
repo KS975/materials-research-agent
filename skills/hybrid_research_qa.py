@@ -9,6 +9,10 @@ from typing import Any
 from agent.evidence_frame import EvidenceFrameBuilder
 from agent.evidence_context import EvidenceContextCompressor
 from agent.evidence_relation import build_source_relation
+from agent.research_analysis import (
+    research_analysis_chart_data,
+    run_research_analysis,
+)
 from agent.research_scenarios import resolve_research_scenario
 from agent.research_slots import normalize_research_slots, parse_target_filters
 from llm.base import LLMProvider
@@ -21,6 +25,10 @@ from skills.material_intelligence import MaterialIntelligenceSkill
 _EXPLICIT_IDENTIFIER = re.compile(
     r"(?<![A-Za-z0-9_.-])(?:[A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*|\d{2,})"
     r"(?![A-Za-z0-9_.-])"
+)
+_STAGE4_SCENARIOS = {8, 9, 10, 11, 18}
+_EVIDENCE_RECORD_ID = re.compile(
+    r"\b(?:mysql|vector|upload|dialog|derived)-[a-f0-9]{20}\b"
 )
 
 
@@ -194,6 +202,41 @@ class HybridResearchQASkill:
         builder.add_mysql_result(mysql_result if isinstance(mysql_result, dict) else {})
         builder.add_vector_result(vector_result)
         builder.add_upload_records(attachments)
+        analysis_result: dict[str, Any] | None = None
+        analysis_record_id: str | None = None
+        if research_workflow["scenario_id"] in _STAGE4_SCENARIOS:
+            emit_progress(
+                "evidence_dataset_build",
+                "completed",
+                "Evidence Dataset 已构建",
+                "已将授权样品的配方、工艺和性能字段转换为只读分析数据集。",
+                sample_count=len(
+                    (mysql_result.get("samples") or [])
+                    if isinstance(mysql_result, dict)
+                    else []
+                ),
+            )
+            emit_progress(
+                "deterministic_analysis",
+                "running",
+                "执行确定性分析",
+                "正在计算变量、冲突、批次、窗口或阶段汇总。",
+            )
+            analysis_result = run_research_analysis(
+                scenario_id=research_workflow["scenario_id"],
+                source=mysql_result if isinstance(mysql_result, dict) else {},
+                args=args,
+                message=message,
+            )
+            analysis_record_id = builder.add_derived_result(analysis_result)
+            emit_progress(
+                "deterministic_analysis",
+                "completed",
+                "确定性分析完成",
+                f"分析状态：{analysis_result.get('status', '-')}；结果已写入 derived 证据。",
+                analysis_status=str(analysis_result.get("status")),
+                chart_data=research_analysis_chart_data(analysis_result),
+            )
         frame = builder.build(warnings=[*vector_warnings, *scenario_warnings])
         source_relation = build_source_relation(frame, vector_result)
 
@@ -215,6 +258,22 @@ class HybridResearchQASkill:
             frame=frame,
             source_relation=source_relation,
         )
+        if research_workflow["scenario_id"] in _STAGE4_SCENARIOS:
+            citation_validation = self._validate_citations(answer, frame)
+            if not citation_validation["valid"]:
+                answer = self._analysis_fallback_report(
+                    result=analysis_result or {},
+                    record_id=analysis_record_id or "",
+                )
+                citation_validation = self._validate_citations(answer, frame)
+                synthesis = {
+                    **synthesis,
+                    "status": "deterministic",
+                    "mode": "deterministic_analysis_report",
+                    "citation_validation": citation_validation,
+                }
+            else:
+                synthesis["citation_validation"] = citation_validation
         emit_progress(
             "hybrid_final_report",
             "completed",
@@ -237,12 +296,16 @@ class HybridResearchQASkill:
             warnings.append(
                 "LLM 综合失败，已降级为后端确定性证据摘要；跨源综合结论需重新生成。"
             )
+        if synthesis.get("mode") == "deterministic_analysis_report":
+            warnings.append("LLM 报告缺少有效证据引用，已改用确定性分析报告。")
         if source_relation["level"] != "ENTITY_LINKED":
             warnings.append(source_relation["warning"])
         source_types = set(frame.source_summary)
         status = "ok" if frame.records else "no_evidence"
         if source_types and source_types <= {"dialog"}:
             status = "no_evidence"
+        if analysis_result is not None:
+            status = str(analysis_result.get("status") or status)
 
         return {
             "status": status,
@@ -259,6 +322,8 @@ class HybridResearchQASkill:
             },
             "mysql_result": mysql_result,
             "vector_result": vector_result,
+            "analysis_result": analysis_result,
+            "chart_data": research_analysis_chart_data(analysis_result or {}),
             "evidence_frame": frame.model_dump(mode="json"),
             "source_relation": source_relation,
             "vector_fact_extraction": {
@@ -311,6 +376,17 @@ class HybridResearchQASkill:
         if not identifier:
             found = _EXPLICIT_IDENTIFIER.findall(message)
             identifier = str(found[-1]) if len(found) == 1 else ""
+        if scenario_id in _STAGE4_SCENARIOS:
+            return {
+                "strategy": "authorized_evidence_dataset_scan",
+                "tool_name": "list_samples_for_analysis",
+                "executor": lambda ctx: self.registry.execute(
+                    "list_samples_for_analysis",
+                    keyword=str(args.get("keyword") or ""),
+                    limit=500,
+                    ctx=ctx,
+                ),
+            }
         if scenario_id == 5:
             return {
                 "strategy": "material_usage_effect_scan",
@@ -566,6 +642,88 @@ class HybridResearchQASkill:
                 "performance": performance,
             })
         return matches
+
+    @staticmethod
+    def _validate_citations(answer: str, frame) -> dict[str, Any]:
+        valid_ids = {record.record_id for record in frame.records}
+        found = list(dict.fromkeys(_EVIDENCE_RECORD_ID.findall(str(answer or ""))))
+        valid_found = [record_id for record_id in found if record_id in valid_ids]
+        invalid_found = [record_id for record_id in found if record_id not in valid_ids]
+        return {
+            "valid": bool(valid_found) and not invalid_found,
+            "valid_count": len(valid_found),
+            "invalid_count": len(invalid_found),
+            "invalid_ids": invalid_found,
+            "policy": "阶段四结论必须至少引用一个真实 EvidenceFrame record_id。",
+        }
+
+    @staticmethod
+    def _analysis_fallback_report(
+        *,
+        result: dict[str, Any],
+        record_id: str,
+    ) -> str:
+        analysis_type = str(result.get("analysis_type") or "research_analysis")
+        dataset = result.get("dataset") or {}
+        lines = [
+            (
+                f"结论：{analysis_type} 状态为 {result.get('status', '-')}；"
+                f"分析范围包含 {dataset.get('sample_count', 0)} 条授权样品。[{record_id}]"
+            ),
+            (
+                f"样本覆盖：读取 {dataset.get('sample_count', 0)} / "
+                f"{dataset.get('total_matching_sample_count', dataset.get('sample_count', 0))} 条；"
+                f"扫描完整={bool(dataset.get('scan_complete', True))}。"
+            ),
+        ]
+        collection_keys = {
+            "key_variable_analysis": "variables",
+            "performance_conflict_analysis": "conflicts",
+            "batch_difference_analysis": "differences",
+            "process_window_discovery": "windows",
+        }
+        collection_key = collection_keys.get(analysis_type)
+        rows = list(result.get(collection_key) or []) if collection_key else []
+        if rows:
+            lines.append("确定性结果（前 5 项）：")
+            for row in rows[:5]:
+                label = str(row.get("field_label") or row.get("field") or "-")
+                if analysis_type == "key_variable_analysis":
+                    detail = (
+                        f"correlation={row.get('correlation')}, "
+                        f"n={row.get('paired_sample_count')}"
+                    )
+                elif analysis_type == "performance_conflict_analysis":
+                    detail = (
+                        f"{row.get('left_target')} r={row.get('left_correlation')}; "
+                        f"{row.get('right_target')} r={row.get('right_correlation')}"
+                    )
+                elif analysis_type == "batch_difference_analysis":
+                    detail = (
+                        f"{row.get('left_group')} mean={row.get('left_mean')}; "
+                        f"{row.get('right_group')} mean={row.get('right_mean')}"
+                    )
+                else:
+                    detail = (
+                        f"recommended={row.get('recommended_min')}~"
+                        f"{row.get('recommended_max')} {row.get('unit') or ''}, "
+                        f"n={row.get('sample_count')}"
+                    ).strip()
+                lines.append(f"- {label}: {detail}")
+        if analysis_type == "stage_report_analysis":
+            lines.append("性能概览：")
+            for row in (result.get("target_statistics") or [])[:5]:
+                lines.append(
+                    f"- {row.get('field_label')}: n={row.get('sample_count')}, "
+                    f"mean={row.get('mean')} {row.get('unit') or ''}".rstrip()
+                )
+        if result.get("warnings"):
+            lines.append(
+                "限制：" + "；".join(str(item) for item in result["warnings"][:5])
+            )
+        if result.get("conclusion_limit"):
+            lines.append(f"结论边界：{result['conclusion_limit']}")
+        return "\n".join(lines)
 
     @staticmethod
     def _vector_query(

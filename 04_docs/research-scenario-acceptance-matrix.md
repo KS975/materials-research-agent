@@ -2,7 +2,7 @@
 
 更新日期：2026-09-09
 基线分支：`codex/structure-adaptation`  
-当前实现：阶段三只读研究场景；阶段四、阶段五仅保留固定 Workflow 分类和边界，不伪装成已执行能力。
+当前实现：阶段三只读研究场景已通过；阶段四分析与报告场景已完成真实 MySQL + 外部向量 + LLM 引用链路验收；阶段五仅保留固定 Workflow 分类和边界。
 
 ## 1. 执行状态定义
 
@@ -10,7 +10,7 @@
 |---|---|
 | `UNIT_PASS` | 已有单元测试证明路由、Tool 调用或 EvidenceFrame 行为正确 |
 | `READY_FOR_REAL_DATA` | 代码链路已开放，等待用当前公司真实 MySQL / 向量数据做人工验收 |
-| `REAL_DATA_PASS` | 已完成本切片 3 个真实问题验收；MySQL、外部向量、EvidenceFrame 与 LLM 综述均通过 |
+| `REAL_DATA_PASS` | 已完成本切片规定数量的真实问题验收；MySQL、外部向量、EvidenceFrame 与 LLM 综述均通过 |
 | `REAL_DATA_INFRA_GAP` | 路由、槽位、MySQL、外部向量与 EvidenceFrame 已通过，但部分问题被外部 LLM 服务权限阻断 |
 | `PLANNED_STAGE_4` | 属于分析与报告场景，本轮不执行，不输出伪结论 |
 | `PLANNED_STAGE_5` | 涉及写入、审批、回流或跨项目资产，本轮不执行 |
@@ -28,17 +28,17 @@
 | 5 | 原料使用效果查询 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 查 PC 用在哪些样品；PC 用量多少；使用 PC 的样品性能如何 | 授权配方扫描、`search_vector_knowledge` | 否 |
 | 6 | 原料替代历史检索 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | PC 替代 ABS 的历史；某牌号替换记录；替代后性能变化 | 授权配方扫描、`search_vector_knowledge` | 否 |
 | 7 | 失败配方 / 失败实验检索 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 查失败配方；以前类似路线为什么失败；失败后调整了什么 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
-| 8 | 关键变量识别 | `historical_analysis` | `PLANNED_STAGE_4` | 哪些变量影响冲击强度；影响 MFR 的关键因素；缩小下一步实验变量 | Evidence Dataset 与分析器 | 否 |
-| 9 | 配方 / 工艺窗口发现 | `process_window` | `PLANNED_STAGE_4` | 找稳定工艺窗口；满足多目标的组分区间；哪些参数组合更稳 | Evidence Dataset、窗口分析 | 否 |
-| 10 | 多性能冲突分析 | `historical_analysis` | `PLANNED_STAGE_4` | 冲击与 MFR 怎么冲突；强度和成本权衡；提高 A 为什么 B 下降 | Evidence Dataset、相关性 / 冲突分析 | 否 |
-| 11 | 批次差异分析 | `historical_analysis` | `PLANNED_STAGE_4` | 正常批次和异常批次差什么；批次间性能波动来源；原料批次是否影响结果 | Evidence Dataset、批次对比 | 否 |
+| 8 | 关键变量识别 | `historical_analysis` | `REAL_DATA_PASS 1/1` | 哪些变量影响冲击强度；影响 MFR 的关键因素；缩小下一步实验变量 | Evidence Dataset 与分析器 | 否 |
+| 9 | 配方 / 工艺窗口发现 | `process_window` | `REAL_DATA_PASS 1/1` | 找稳定工艺窗口；满足多目标的组分区间；哪些参数组合更稳 | Evidence Dataset、窗口分析 | 否 |
+| 10 | 多性能冲突分析 | `historical_analysis` | `REAL_DATA_PASS 1/1` | 冲击与 MFR 怎么冲突；强度和成本权衡；提高 A 为什么 B 下降 | Evidence Dataset、相关性 / 冲突分析 | 否 |
+| 11 | 批次差异分析 | `historical_analysis` | `REAL_DATA_PASS 1/1` | 正常批次和异常批次差什么；批次间性能波动来源；原料批次是否影响结果 | Evidence Dataset、批次对比 | 否 |
 | 12 | 异常与失效案例检索 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 查开裂案例；析出或变色历史；粘接失效类似案例 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
 | 13 | 竞品对标 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 与竞品性能差距；历史上哪些路线最接近竞品；竞品关键性能对比 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
 | 14 | 新项目冷启动 | `research_cold_start` | `REAL_DATA_PASS 3/3` | 新项目目标性能给首轮方案；结合历史和失败记录冷启动；有原料限制时从哪开始 | 多条件筛选、相似历史、失败案例、向量证据 | 否 |
 | 15 | 测试结果自动关联样品 | `result_feature_ingestion` | `PLANNED_STAGE_5` | LIMS 结果回样品；检测结果错配发现；自动关联实验与配方 | 结果匹配、特征登记、人工审核 | 是，需审核 |
 | 16 | 图谱 / 曲线结果复用 | `result_feature_ingestion` | `PLANNED_STAGE_5` | DSC 特征参与分析；粒径曲线复用；谱图特征关联样品 | 特征抽取、待审核登记 | 是，需审核 |
 | 17 | 项目知识快速问答 | `evidence_profile` | `REAL_DATA_PASS 3/3` | 去年做过哪些方案；某原料为什么停用；项目结论和风险是什么 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
-| 18 | 自动生成阶段总结 | `stage_report` | `PLANNED_STAGE_4` | 生成阶段报告；汇总项目进展；形成实验结论和证据链 | 聚合、引用校验、报告生成 | 否 |
+| 18 | 自动生成阶段总结 | `stage_report` | `REAL_DATA_PASS 1/1` | 生成阶段报告；汇总项目进展；形成实验结论和证据链 | 聚合、引用校验、报告生成 | 否 |
 | 19 | 模型版本与实验回流 | `closed_loop_asset` | `PLANNED_STAGE_5` | 新实验回流；比较 Challenger；模型是否晋级 | Dataset 版本、模型治理、审批 | 是，需审批 |
 | 20 | 跨项目复用 | `closed_loop_asset` | `PLANNED_STAGE_5` | 其他项目能否复用模型；复用历史经验；资产授权范围是什么 | Dataset / Model / 报告资产索引 | 是，需审批 |
 
@@ -69,11 +69,14 @@ tests/unit/test_hybrid_research_routing.py
 tests/unit/test_research_slots.py
 tests/unit/test_evidence_relation.py
 tests/unit/test_hybrid_router_override.py
+tests/unit/test_research_analysis.py
 ```
 
 2026-09-08 定向结果：10 passed。覆盖 20 场景到 8 Workflow 的完整性、自然语言相似表述、原料使用效果、原料替代边界、目标性能筛选优先级、跨源相似路由不被单源意图降级，以及原有 EvidenceFrame 行为。
 
 2026-09-09 切片 2 定向结果：26 passed。补充覆盖数值阈值不被误判为样品 ID、槽位兜底解析、来源关联分级、显式跨源研究问题的确定性路由，以及证据比较差异。
+
+2026-09-09 切片 3 定向结果：45 passed。补充覆盖阶段四 Workflow 开放、Evidence Dataset 构建、关键变量、多性能冲突、批次差异、稳定窗口、阶段汇总、单位一致性、derived 证据、引用校验和路由兜底。
 
 ## 5. 2026-09-08 真实只读数据冒烟
 
@@ -172,5 +175,21 @@ Access to model denied. Please make sure you are eligible for using the model.
 阶段三的固定 Workflow 分类、确定性路由兜底、槽位解析、真实 MySQL 检索、受管外部向量检索、证据分型、冲突保留和引用输出已经达到切片 2 目标。`TOPIC_ONLY` 是本轮真实数据的实际关联等级：向量文档缺少可证明同一样品/实验/项目的显式 ID，系统没有把文本相似度伪装成实体级关联。
 
 `qwen3.7-plus` 权限恢复后，`S12-03、S14-02、S14-03` 已全部串行复跑通过；无需调整业务数据链路或降低证据阈值。
+
+## 8. 2026-09-09 切片 3：阶段四分析与报告场景真实验收
+
+执行方式：真实业务 MySQL + 受管外部向量 API + 真实 LLM；串行执行。5 个场景各使用 1 个真实问题验收，本阶段验收重点是分析能力可用性、可追溯性和引用有效性，不涉及任何写入。
+
+| 用例 | 场景 / 问题 | MySQL | 向量 | Evidence Dataset / 分析 | 报告与引用 | 结果 |
+|---|---|---|---|---|---|---|
+| S8-01 | 关键变量识别：哪些变量影响密度差？ | ok，563 条 | ok，2 条 | 563 条样本，关键变量 2 项 | LLM ok，3 个证据引用 | 通过 |
+| S9-01 | 工艺窗口发现：密度差大于 100 且持液量小于 0.1 | ok，563 条 | ok，5 条，score 0.530-0.536 | 563 条样本，窗口字段 2 项 | LLM ok，7 个证据引用 | 通过 |
+| S10-01 | 多性能冲突：密度差与持液量为什么冲突 | ok，563 条 | ok，5 条，score 0.458-0.486 | 563 条样本，冲突变量 1 项 | LLM ok，6 个证据引用 | 通过 |
+| S11-01 | 批次差异：按项目分析主要不同 | ok，563 条 | ok，5 条，score 0.481-0.530 | 563 条样本，差异字段 3 项 | LLM ok，6 个证据引用 | 通过 |
+| S18-01 | 阶段总结：生成当前授权项目报告 | ok，563 条 | ok，5 条，score 0.460-0.495 | 563 条样本，性能汇总 6 项 | LLM ok，2 个证据引用 | 通过 |
+
+所有用例均命中 `hybrid_research_qa` 和对应阶段四 Workflow，EvidenceFrame 均包含 `derived=1`，最终报告引用真实 `record_id`。来源关联等级保持 `TOPIC_ONLY`：向量资料与 MySQL 样本没有显式实体 ID 映射，系统未把主题相关伪装成实体等同。
+
+分析边界：关键变量与冲突分析使用皮尔逊相关性，只描述历史样本中的线性同向 / 反向变化，不输出因果结论；窗口是满足条件的历史样本四分位区间，不外推虚拟可行域；批次差异默认按项目分组，不能自动把组别解释为正常 / 异常；阶段报告只覆盖当前授权范围和返回证据。
 
 此前真实 LLM 综述曾出现一次 `ReadTimeout`；使用固定摘要器复跑证明 MySQL、外部向量与 EvidenceFrame 链路本身正常。2026-09-09 切片 1 已增加有界证据上下文、一次降容重试和确定性降级报告，真实端到端复测不再超时。生产配置禁止非空 `EXTERNAL_VECTOR_QUERY_COMPANY_ID`。

@@ -119,6 +119,60 @@ class EvidenceFrameBuilder:
         self._add_collection_entities(payload.get("ranking"), row_key="sample")
         self._add_diff_records(payload)
 
+    def add_derived_result(self, result: Mapping[str, Any]) -> str:
+        """Register deterministic analysis output as traceable derived evidence."""
+        analysis_type = str(result.get("analysis_type") or "research_analysis")
+        compact = {
+            "status": result.get("status"),
+            "analysis_type": analysis_type,
+            "scenario_id": result.get("scenario_id"),
+            "target": result.get("target"),
+            "targets": result.get("targets"),
+            "filters": result.get("filters"),
+            "sample_count": (result.get("dataset") or {}).get("sample_count"),
+            "scan_complete": (result.get("dataset") or {}).get("scan_complete"),
+            "scan_truncated": (result.get("dataset") or {}).get("scan_truncated"),
+            "variables": result.get("variables"),
+            "conflicts": result.get("conflicts"),
+            "differences": result.get("differences"),
+            "windows": result.get("windows"),
+            "scope": result.get("scope"),
+            "target_statistics": result.get("target_statistics"),
+            "feature_coverage": result.get("feature_coverage"),
+            "warnings": result.get("warnings"),
+            "conclusion_limit": result.get("conclusion_limit"),
+        }
+        value = json.dumps(
+            compact, ensure_ascii=False, sort_keys=True, default=str
+        )
+        record_id = self._stable_id("derived", [analysis_type, value])
+        self.records.append(
+            EvidenceRecord(
+                record_id=record_id,
+                subject_id=f"analysis:{analysis_type}",
+                entity_type="analysis_result",
+                attribute="deterministic_analysis",
+                value=value,
+                source_type=EvidenceSourceType.DERIVED,
+                source_uri=f"derived://research-analysis/{analysis_type}",
+                confidence=1.0,
+                authority_level=EvidenceAuthority.EXTRACTED,
+                review_status=EvidenceReviewStatus.AUTO,
+                permission_scope=self._permission_scope(),
+                alignment_level="L1",
+                metadata={
+                    "deterministic": True,
+                    "supporting_record_refs": list(
+                        result.get("evidence_refs") or []
+                    )[:100],
+                    "calculation_policy": (result.get("dataset") or {}).get(
+                        "calculation_policy"
+                    ),
+                },
+            )
+        )
+        return record_id
+
     def add_vector_result(self, result: Mapping[str, Any]) -> None:
         hits = result.get("hits")
         if not isinstance(hits, list):
@@ -313,7 +367,29 @@ class EvidenceFrameBuilder:
         for row in rows:
             if row_key is not None:
                 row = row.get(row_key) if isinstance(row, Mapping) else None
-            self._walk_entity(row or {})
+            payload = row or {}
+            sample = payload.get("sample") if isinstance(payload, Mapping) else None
+            if isinstance(sample, Mapping) and sample.get("id") is not None:
+                subject = f"sample:{sample['id']}"
+                for section in _FIELD_SECTIONS:
+                    self._add_field_list(
+                        subject=subject,
+                        entity_type="sample",
+                        section=section,
+                        fields=payload.get(section),
+                    )
+                if isinstance(payload.get("conditions"), Mapping):
+                    for field, value in payload["conditions"].items():
+                        self._add_record(
+                            subject_id=subject,
+                            entity_type="sample",
+                            attribute=f"conditions.{field}",
+                            value=value,
+                            source_uri="mysql://authorized_material_query",
+                        )
+                self._walk_entity(sample)
+            else:
+                self._walk_entity(payload)
 
     def _add_diff_records(self, payload: Mapping[str, Any]) -> None:
         left = payload.get("left_sample") or {}

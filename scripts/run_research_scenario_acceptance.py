@@ -13,7 +13,8 @@ from typing import Any
 import httpx
 
 
-_RECORD_ID = re.compile(r"\b(?:mysql|vector|upload|dialog)-[0-9a-f]{20}\b")
+_RECORD_ID = re.compile(r"\b(?:mysql|vector|upload|dialog|derived)-[0-9a-f]{20}\b")
+_STAGE4_CASE_IDS = {"S8-01", "S9-01", "S10-01", "S11-01", "S18-01"}
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,30 @@ CASES: tuple[AcceptanceCase, ...] = (
     AcceptanceCase("S7-02", 7, "以前类似萃取配方路线为什么失败？结合历史案例。"),
     AcceptanceCase("S7-03", 7, "查失败后调整过的实验记录，并结合内部历史资料。"),
 
+    AcceptanceCase(
+        "S8-01",
+        8,
+        "哪些变量影响密度差？结合历史资料分析。",
+        ("target_metrics",),
+    ),
+    AcceptanceCase(
+        "S9-01",
+        9,
+        "找密度差大于100且持液量小于0.1的稳定工艺窗口，并结合历史资料。",
+        ("filters",),
+    ),
+    AcceptanceCase(
+        "S10-01",
+        10,
+        "密度差和持液量为什么冲突？结合历史资料分析。",
+        ("target_metrics",),
+    ),
+    AcceptanceCase(
+        "S11-01",
+        11,
+        "按项目分析批次差异，并结合历史资料说明主要不同。",
+    ),
+
     AcceptanceCase("S12-01", 12, "查找开裂异常案例，并结合历史资料。", ("phenomenon",)),
     AcceptanceCase("S12-02", 12, "查析出或变色的历史失效案例，并结合资料。", ("phenomenon",)),
     AcceptanceCase("S12-03", 12, "查粘接失效类似案例，并结合内部资料。", ("phenomenon",)),
@@ -112,6 +137,7 @@ CASES: tuple[AcceptanceCase, ...] = (
     AcceptanceCase("S17-01", 17, "去年做过哪些方案？结合数据库和历史资料。"),
     AcceptanceCase("S17-02", 17, "这个项目里水为什么后来停用？结合历史资料。"),
     AcceptanceCase("S17-03", 17, "项目知识问答：当前授权项目的结论和风险有哪些？结合资料。"),
+    AcceptanceCase("S18-01", 18, "生成当前授权项目阶段总结报告，并结合历史资料。"),
 )
 
 
@@ -188,6 +214,7 @@ def run_case(
     vector = data.get("vector_result") or {}
     frame = data.get("evidence_frame") or {}
     synthesis = data.get("synthesis") or {}
+    analysis_result = data.get("analysis_result") or {}
     tool_args = body.get("tool_args") or {}
     source_summary = frame.get("source_summary") or {}
     scores = [
@@ -222,11 +249,20 @@ def run_case(
             or len(vector.get("warnings") or []) > 0
         )
     )
-    report_pass = (
-        synthesis.get("status") == "ok"
-        and bool(citations)
-        and bool(body.get("answer"))
-    )
+    if case.case_id in _STAGE4_CASE_IDS:
+        report_pass = (
+            analysis_result.get("status") == "ok"
+            and synthesis.get("status") in {"ok", "deterministic"}
+            and int(source_summary.get("derived", 0) or 0) > 0
+            and bool(citations)
+            and bool(body.get("answer"))
+        )
+    else:
+        report_pass = (
+            synthesis.get("status") == "ok"
+            and bool(citations)
+            and bool(body.get("answer"))
+        )
     return {
         "case_id": case.case_id,
         "expected_scenario_id": case.scenario_id,
@@ -242,6 +278,19 @@ def run_case(
             "execution_status": workflow.get("execution_status"),
         },
         "structured_strategy": data.get("structured_strategy"),
+        "analysis": {
+            "status": analysis_result.get("status"),
+            "type": analysis_result.get("analysis_type"),
+            "sample_count": (analysis_result.get("dataset") or {}).get("sample_count"),
+            "result_count": len(
+                analysis_result.get("variables")
+                or analysis_result.get("conflicts")
+                or analysis_result.get("differences")
+                or analysis_result.get("windows")
+                or analysis_result.get("target_statistics")
+                or []
+            ),
+        },
         "mysql": {
             "status": mysql.get("status"),
             "analysis_type": mysql.get("analysis_type"),

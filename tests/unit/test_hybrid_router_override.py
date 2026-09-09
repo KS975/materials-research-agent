@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from agent.deepseek_intent_router import DeepSeekIntentRouter
+from api.chat_ui import _looks_like_hybrid_research
 
 
 class ClarifyingLLM:
@@ -27,3 +28,19 @@ def test_deterministic_hybrid_research_overrides_model_clarification():
     )
     assert decision.intent == "hybrid_research_qa"
     assert decision.needs_clarification is False
+
+
+def test_stage4_analysis_phrases_use_hybrid_research_router():
+    for message in (
+        "哪些变量影响冲击强度？结合历史资料分析。",
+        "找冲击强度大于35、MFR小于18的稳定工艺窗口，并结合资料。",
+        "冲击强度和MFR为什么冲突？结合历史资料。",
+        "分析正常批次和异常批次差异，并结合资料。",
+        "生成当前项目阶段总结报告，并结合历史资料。",
+    ):
+        assert _looks_like_hybrid_research(message)
+
+    decision = DeepSeekIntentRouter(ClarifyingLLM()).route(
+        "哪些变量影响冲击强度？结合历史资料分析。"
+    )
+    assert decision.intent == "hybrid_research_qa"

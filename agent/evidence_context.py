@@ -111,7 +111,8 @@ class EvidenceContextCompressor:
         }
         terms = self._query_terms(query)
         source_limits = {
-            "mysql": max(1, int(record_limit * 0.75)),
+            "mysql": max(1, int(record_limit * 0.60)),
+            "derived": max(1, int(record_limit * 0.15)),
             "vector_api": max(1, int(record_limit * 0.15)),
             "upload": max(1, int(record_limit * 0.10)),
             "dialog": 1,
@@ -198,6 +199,8 @@ class EvidenceContextCompressor:
         score = 0.0
         if record.source_type.value == "mysql":
             score += 20
+        elif record.source_type.value == "derived":
+            score += 30
         elif record.source_type.value == "vector_api":
             score += 14 + float(record.confidence) * 10
         elif record.source_type.value == "upload":
