@@ -32,9 +32,9 @@
 | 9 | 配方 / 工艺窗口发现 | `process_window` | `PLANNED_STAGE_4` | 找稳定工艺窗口；满足多目标的组分区间；哪些参数组合更稳 | Evidence Dataset、窗口分析 | 否 |
 | 10 | 多性能冲突分析 | `historical_analysis` | `PLANNED_STAGE_4` | 冲击与 MFR 怎么冲突；强度和成本权衡；提高 A 为什么 B 下降 | Evidence Dataset、相关性 / 冲突分析 | 否 |
 | 11 | 批次差异分析 | `historical_analysis` | `PLANNED_STAGE_4` | 正常批次和异常批次差什么；批次间性能波动来源；原料批次是否影响结果 | Evidence Dataset、批次对比 | 否 |
-| 12 | 异常与失效案例检索 | `hybrid_search_rank` | `REAL_DATA_INFRA_GAP 2/3` | 查开裂案例；析出或变色历史；粘接失效类似案例 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
+| 12 | 异常与失效案例检索 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 查开裂案例；析出或变色历史；粘接失效类似案例 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
 | 13 | 竞品对标 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 与竞品性能差距；历史上哪些路线最接近竞品；竞品关键性能对比 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
-| 14 | 新项目冷启动 | `research_cold_start` | `REAL_DATA_INFRA_GAP 1/3` | 新项目目标性能给首轮方案；结合历史和失败记录冷启动；有原料限制时从哪开始 | 多条件筛选、相似历史、失败案例、向量证据 | 否 |
+| 14 | 新项目冷启动 | `research_cold_start` | `REAL_DATA_PASS 3/3` | 新项目目标性能给首轮方案；结合历史和失败记录冷启动；有原料限制时从哪开始 | 多条件筛选、相似历史、失败案例、向量证据 | 否 |
 | 15 | 测试结果自动关联样品 | `result_feature_ingestion` | `PLANNED_STAGE_5` | LIMS 结果回样品；检测结果错配发现；自动关联实验与配方 | 结果匹配、特征登记、人工审核 | 是，需审核 |
 | 16 | 图谱 / 曲线结果复用 | `result_feature_ingestion` | `PLANNED_STAGE_5` | DSC 特征参与分析；粒径曲线复用；谱图特征关联样品 | 特征抽取、待审核登记 | 是，需审核 |
 | 17 | 项目知识快速问答 | `evidence_profile` | `REAL_DATA_PASS 3/3` | 去年做过哪些方案；某原料为什么停用；项目结论和风险是什么 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
@@ -114,12 +114,12 @@ tests/unit/test_hybrid_router_override.py
 | 5 原料使用效果查询 | 3/3 | 通过 | ok | ok | 通过 | `TOPIC_ONLY` | 通过 |
 | 6 原料替代历史检索 | 3/3 | 通过 | ok | ok | 通过 | `TOPIC_ONLY` | 通过；输出共存边界 |
 | 7 失败配方 / 失败实验检索 | 3/3 | 通过 | ok | ok | 通过 | `TOPIC_ONLY` | 通过 |
-| 12 异常与失效案例检索 | 2/3 | 通过 | ok | ok | 通过 | `TOPIC_ONLY` | `S12-03` LLM 阻断 |
+| 12 异常与失效案例检索 | 3/3 | 通过 | ok | ok | 通过 | `TOPIC_ONLY` | 通过 |
 | 13 竞品对标 | 3/3 | 通过 | ok | ok | 通过 | `TOPIC_ONLY` | 通过 |
-| 14 新项目冷启动 | 1/3 | 通过 | ok | ok | 通过 | `TOPIC_ONLY` | `S14-02/S14-03` LLM 阻断 |
+| 14 新项目冷启动 | 3/3 | 通过 | ok | ok | 通过 | `TOPIC_ONLY` | 通过 |
 | 17 项目知识快速问答 | 3/3 | 通过 | ok | ok | 通过 | `TOPIC_ONLY` | 通过 |
 
-当前唯一未闭环项是最终 LLM 综述，不是路由、槽位抽取、结构化查询、外部向量检索或 EvidenceFrame。最小直连探针返回：
+模型权限恢复初期，最终 LLM 综述曾出现间歇性拒绝；最小直连探针一度返回：
 
 ```text
 HTTP 403
@@ -127,7 +127,7 @@ AccessDenied.Unpurchased
 Access to model denied. Please make sure you are eligible for using the model.
 ```
 
-因此 30/33 通过、3 例保留确定性降级报告。并发 3 曾触发更多 `403 Forbidden` 和偶发 `ReadTimeout`；串行和冷却后复测仍复现模型权限错误，验收不降低报告标准、不把降级报告记为 LLM 通过。
+权限生效后按串行冷却策略复跑 `S12-03、S14-02、S14-03`，三例均通过；最终结果为 33/33。并发 3 曾触发更多 `403 Forbidden` 和偶发 `ReadTimeout`，本矩阵仅把 `synthesis.status=ok` 的真实 LLM 报告记为通过，不把降级报告记为通过。
 
 ### 7.2 33 个真实问题
 
@@ -156,13 +156,13 @@ Access to model denied. Please make sure you are eligible for using the model.
 | S7-03 | 查失败后调整过的实验记录，并结合内部历史资料。 | 通过 |
 | S12-01 | 查找开裂异常案例，并结合历史资料。 | 通过 |
 | S12-02 | 查析出或变色的历史失效案例，并结合资料。 | 通过 |
-| S12-03 | 查粘接失效类似案例，并结合内部资料。 | 数据链路通过；LLM 403，降级摘要 |
+| S12-03 | 查粘接失效类似案例，并结合内部资料。 | 通过；权限恢复后降容重试成功 |
 | S13-01 | 与竞品 ABS 的性能差距是多少？结合历史数据判断。 | 通过 |
 | S13-02 | 历史上哪些路线最接近竞品 PC/ABS？结合资料。 | 通过 |
 | S13-03 | 查竞品对标的内部样品和资料。 | 通过 |
 | S14-01 | 新项目要求密度差大于 100 且持液量小于 0.1，请结合历史和失败记录给首轮方案。 | 通过 |
-| S14-02 | 新项目冷启动：目标密度差大于 150，请结合历史资料给第一轮方案。 | 数据链路通过；LLM 403，降级摘要 |
-| S14-03 | 新项目从零开始，请结合历史项目、失败记录和资料给首轮实验建议。 | 数据链路通过；LLM 403，降级摘要 |
+| S14-02 | 新项目冷启动：目标密度差大于 150，请结合历史资料给第一轮方案。 | 通过；权限恢复后串行复跑成功 |
+| S14-03 | 新项目从零开始，请结合历史项目、失败记录和资料给首轮实验建议。 | 通过；权限恢复后降容重试成功 |
 | S17-01 | 去年做过哪些方案？结合数据库和历史资料。 | 通过 |
 | S17-02 | 这个项目里水为什么后来停用？结合历史资料。 | 通过 |
 | S17-03 | 项目知识问答：当前授权项目的结论和风险有哪些？结合资料。 | 通过 |
@@ -171,6 +171,6 @@ Access to model denied. Please make sure you are eligible for using the model.
 
 阶段三的固定 Workflow 分类、确定性路由兜底、槽位解析、真实 MySQL 检索、受管外部向量检索、证据分型、冲突保留和引用输出已经达到切片 2 目标。`TOPIC_ONLY` 是本轮真实数据的实际关联等级：向量文档缺少可证明同一样品/实验/项目的显式 ID，系统没有把文本相似度伪装成实体级关联。
 
-在恢复 `qwen3.7-plus` 模型访问权限或切换到已开通的等效 LLM 后，只需串行重跑 `S12-03、S14-02、S14-03`；无需调整业务数据链路或降低证据阈值。
+`qwen3.7-plus` 权限恢复后，`S12-03、S14-02、S14-03` 已全部串行复跑通过；无需调整业务数据链路或降低证据阈值。
 
 此前真实 LLM 综述曾出现一次 `ReadTimeout`；使用固定摘要器复跑证明 MySQL、外部向量与 EvidenceFrame 链路本身正常。2026-09-09 切片 1 已增加有界证据上下文、一次降容重试和确定性降级报告，真实端到端复测不再超时。生产配置禁止非空 `EXTERNAL_VECTOR_QUERY_COMPANY_ID`。
