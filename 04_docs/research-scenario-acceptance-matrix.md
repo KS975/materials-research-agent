@@ -36,12 +36,12 @@
 | 12 | 异常与失效案例检索 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 查开裂案例；析出或变色历史；粘接失效类似案例 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
 | 13 | 竞品对标 | `hybrid_search_rank` | `REAL_DATA_PASS 3/3` | 与竞品性能差距；历史上哪些路线最接近竞品；竞品关键性能对比 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
 | 14 | 新项目冷启动 | `research_cold_start` | `REAL_DATA_PASS 3/3` | 新项目目标性能给首轮方案；结合历史和失败记录冷启动；有原料限制时从哪开始 | 多条件筛选、相似历史、失败案例、向量证据 | 否 |
-| 15 | 测试结果自动关联样品 | `result_feature_ingestion` | `DISPLAY_SCOPED` | 对话输入检测结果，系统匹配样品/实验/配方，歧义时提示确认 | 编号匹配、歧义检测、待确认建议 | 否，不写数据库 |
-| 16 | 图谱 / 曲线结果复用 | `result_feature_ingestion` | `CONDITIONAL_QUERY` | 查询已有 DSC/TGA/粒径结构化特征；需图像识别时明确降级 | 结构化特征查询、降级提示 | 否，不做图像识别 |
+| 15 | 测试结果自动关联样品 | `result_feature_ingestion` | `UNIT_PASS` | 对话输入检测结果，系统匹配样品/实验/配方，歧义时提示确认 | 编号匹配、歧义检测、待确认建议 | 否，不写数据库 |
+| 16 | 图谱 / 曲线结果复用 | `result_feature_ingestion` | `UNIT_PASS` | 查询已有 DSC/TGA/粒径结构化特征；需图像识别时明确降级 | 结构化特征查询、降级提示 | 否，不做图像识别 |
 | 17 | 项目知识快速问答 | `evidence_profile` | `REAL_DATA_PASS 3/3` | 去年做过哪些方案；某原料为什么停用；项目结论和风险是什么 | `list_samples_for_analysis`、`search_vector_knowledge` | 否 |
 | 18 | 自动生成阶段总结 | `stage_report` | `REAL_DATA_PASS 1/1` | 生成阶段报告；汇总项目进展；形成实验结论和证据链 | 聚合、引用校验、报告生成 | 否 |
-| 19 | 模型版本与实验回流 | `closed_loop_asset` | `INTERFACE_RESERVED` | 展示版仅预留入口；触发时返回暂未开放 | 接口占位、明确提示 | 否，不做回流 |
-| 20 | 跨项目复用 | `cross_project_query` | `DISPLAY_SCOPED` | 查其他项目可复用的数据/模型/报告/经验 | 权限校验、只读查询、来源展示 | 否，只读 |
+| 19 | 模型版本与实验回流 | `experiment_loopback` | `UNIT_PASS` | 展示版仅预留入口；触发时返回暂未开放 | 接口占位、明确提示 | 否，不做回流 |
+| 20 | 跨项目复用 | `cross_project_query` | `UNIT_PASS` | 查其他项目可复用的数据/模型/报告/经验 | 权限校验、只读查询、来源展示 | 否，只读 |
 
 ## 3. 阶段三补充验收口径
 

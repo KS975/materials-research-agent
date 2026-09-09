@@ -81,7 +81,7 @@ class FakeLLM:
         return "综合结论。"
 
 
-def test_all_twenty_scenarios_map_to_eight_fixed_workflows() -> None:
+def test_all_twenty_scenarios_map_to_nine_fixed_workflows() -> None:
     expected = {tuple(spec["scenario_ids"]) for spec in RESEARCH_WORKFLOWS.values()}
     assert expected == {
         (1, 2, 3, 5, 6, 7, 12, 13),
@@ -91,7 +91,8 @@ def test_all_twenty_scenarios_map_to_eight_fixed_workflows() -> None:
         (8, 10, 11),
         (9,),
         (18,),
-        (19, 20),
+        (19,),
+        (20,),
     }
 
     for scenario_id in range(1, 21):
@@ -233,6 +234,82 @@ def test_material_substitution_remains_co_occurrence_not_proof() -> None:
     assert result["mysql_result"]["analysis_type"] == "material_substitution_history"
     assert result["mysql_result"]["count"] == 0
     assert any("不能自动证明发生过替代" in item for item in result["warnings"])
+
+
+def test_scenario15_result_association_returns_pending_confirmation() -> None:
+    registry = FakeRegistry()
+    skill = HybridResearchQASkill(
+        registry=registry,
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=lambda *_args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    result = skill.answer(
+        message="检测结果 EXP-128 需要关联样品",
+        tool_args={},
+        ctx=_ctx(),
+    )
+    assert result["research_workflow"]["scenario_id"] == 15
+    assert result["research_workflow"]["execution_status"] == "SUPPORTED_DISPLAY"
+    assert result["research_workflow"]["write_policy"] == "NO_WRITE"
+    assert result["mysql_result"]["analysis_type"] == "result_association"
+
+
+def test_scenario16_spectrum_query_degrades_without_structured_features() -> None:
+    registry = FakeRegistry()
+    skill = HybridResearchQASkill(
+        registry=registry,
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=lambda *_args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    result = skill.answer(
+        message="查 EXP-128 的 DSC 图谱特征",
+        tool_args={},
+        ctx=_ctx(),
+    )
+    assert result["research_workflow"]["scenario_id"] == 16
+    assert result["research_workflow"]["execution_status"] == "SUPPORTED_DISPLAY"
+    assert result["mysql_result"]["analysis_type"] == "spectrum_feature_query"
+
+
+def test_scenario19_experiment_loopback_is_interface_reserved() -> None:
+    registry = FakeRegistry()
+    skill = HybridResearchQASkill(
+        registry=registry,
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=lambda *_args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    result = skill.answer(
+        message="实验回流后更新模型",
+        tool_args={},
+        ctx=_ctx(),
+    )
+    assert result["research_workflow"]["scenario_id"] == 19
+    assert result["research_workflow"]["execution_status"] == "INTERFACE_RESERVED"
+    assert result["status"] == "interface_reserved"
+    assert result["mysql_result"] is None
+    assert "暂未开放" in result["answer"]
+
+
+def test_scenario20_cross_project_is_read_only() -> None:
+    registry = FakeRegistry()
+    skill = HybridResearchQASkill(
+        registry=registry,
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=lambda *_args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    result = skill.answer(
+        message="哪些项目的数据可以跨项目复用？",
+        tool_args={},
+        ctx=_ctx(),
+    )
+    assert result["research_workflow"]["scenario_id"] == 20
+    assert result["research_workflow"]["execution_status"] == "SUPPORTED_DISPLAY"
+    assert result["research_workflow"]["write_policy"] == "NO_WRITE"
+    assert result["mysql_result"]["analysis_type"] == "cross_project_asset_query"
 
 
 def test_hybrid_similarity_is_not_downgraded_by_deterministic_similarity_router() -> None:

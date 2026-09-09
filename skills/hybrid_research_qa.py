@@ -27,6 +27,8 @@ _EXPLICIT_IDENTIFIER = re.compile(
     r"(?![A-Za-z0-9_.-])"
 )
 _STAGE4_SCENARIOS = {8, 9, 10, 11, 18}
+_DISPLAY_SCENARIOS = {15, 16, 20}
+_INTERFACE_RESERVED_SCENARIOS = {19}
 _EVIDENCE_RECORD_ID = re.compile(
     r"\b(?:mysql|vector|upload|dialog|derived)-[a-f0-9]{20}\b"
 )
@@ -77,7 +79,14 @@ class HybridResearchQASkill:
         )
         query = str(args.get("history_query") or args.get("query") or message).strip()
         research_workflow = resolve_research_scenario(message, args)
-        if research_workflow["execution_status"] != "SUPPORTED":
+        if research_workflow["scenario_id"] in _INTERFACE_RESERVED_SCENARIOS:
+            return self._interface_reserved_result(
+                message=message,
+                args=args,
+                research_workflow=research_workflow,
+                scope=scope,
+            )
+        if research_workflow["execution_status"] not in {"SUPPORTED", "SUPPORTED_DISPLAY"}:
             raise ValueError(
                 f"研究场景“{research_workflow['scenario_name']}”属于"
                 f"{research_workflow['execution_status']}，当前切片未开放执行"
@@ -387,6 +396,30 @@ class HybridResearchQASkill:
                     ctx=ctx,
                 ),
             }
+        if scenario_id == 15:
+            return {
+                "strategy": "result_identifier_match",
+                "tool_name": "list_samples_for_analysis",
+                "executor": lambda ctx: self._result_association_scan(
+                    ctx, args, message
+                ),
+            }
+        if scenario_id == 16:
+            return {
+                "strategy": "structured_spectrum_feature_query",
+                "tool_name": "list_samples_for_analysis",
+                "executor": lambda ctx: self._spectrum_feature_scan(
+                    ctx, args, message
+                ),
+            }
+        if scenario_id == 20:
+            return {
+                "strategy": "cross_project_read_only_asset_query",
+                "tool_name": "list_samples_for_analysis",
+                "executor": lambda ctx: self._cross_project_asset_scan(
+                    ctx, args, message
+                ),
+            }
         if scenario_id == 5:
             return {
                 "strategy": "material_usage_effect_scan",
@@ -614,6 +647,220 @@ class HybridResearchQASkill:
             ],
         }
 
+    def _interface_reserved_result(
+        self,
+        *,
+        message: str,
+        args: dict[str, Any],
+        research_workflow: dict[str, Any],
+        scope: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "status": "interface_reserved",
+            "answer": (
+                f"场景“{research_workflow['scenario_name']}”的正式闭环功能暂未开放，"
+                "当前系统仅预留了接口位置。实验回流、Dataset 版本、Challenger 模型评估"
+                "和模型晋级将在试点或交付阶段实现。当前操作不会修改任何数据或模型。"
+            ),
+            "synthesis": {
+                "status": "not_implemented",
+                "mode": "interface_reserved",
+            },
+            "analysis_type": "hybrid_research_qa",
+            "query": message,
+            "resolved_tool_args": args,
+            "research_workflow": research_workflow,
+            "analysis_scope": scope,
+            "mysql_result": None,
+            "vector_result": None,
+            "analysis_result": None,
+            "chart_data": None,
+            "evidence_frame": None,
+            "source_relation": None,
+            "evidence": [],
+            "warnings": [research_workflow["boundary"]],
+        }
+
+    def _result_association_scan(
+        self,
+        ctx: UserContext,
+        args: dict[str, Any],
+        message: str,
+    ) -> dict[str, Any]:
+        identifiers = _EXPLICIT_IDENTIFIER.findall(message) or [
+            str(args.get("identifier") or "")
+        ]
+        identifiers = [item for item in identifiers if item]
+        if not identifiers:
+            return {
+                "status": "missing_identifier",
+                "analysis_type": "result_association",
+                "matches": [],
+                "warnings": [
+                    "未在当前输入中识别到样品、实验或配方编号；请提供编号以生成关联建议。"
+                ],
+            }
+        matches = []
+        ambiguity_warnings = []
+        for identifier in identifiers[:3]:
+            result = self.registry.execute(
+                "list_samples_for_analysis",
+                keyword=identifier,
+                limit=10,
+                ctx=ctx,
+            )
+            samples = list(result.get("samples") or result.get("results") or [])
+            # Normalize nested list_samples_for_analysis rows to flat sample info.
+            normalized = []
+            for item in samples:
+                sample = item.get("sample") if isinstance(item, dict) else None
+                if isinstance(sample, dict):
+                    normalized.append(sample)
+                elif isinstance(item, dict):
+                    normalized.append(item)
+            samples = normalized
+            if len(samples) == 1:
+                sample = samples[0]
+                matches.append({
+                    "identifier": identifier,
+                    "match_status": "UNIQUE_MATCH",
+                    "matched_sample": {
+                        "sample_id": sample.get("sample_id")
+                        or sample.get("id")
+                        or identifier,
+                        "project_id": sample.get("project_id"),
+                        "name": sample.get("name") or sample.get("sample_name"),
+                    },
+                    "confirmation_required": True,
+                })
+            elif len(samples) > 1:
+                ambiguity_warnings.append(
+                    f"编号 {identifier} 匹配到 {len(samples)} 个候选，需要用户确认。"
+                )
+                matches.append({
+                    "identifier": identifier,
+                    "match_status": "AMBIGUOUS",
+                    "candidate_count": len(samples),
+                    "candidates": [
+                        {
+                            "sample_id": item.get("sample_id") or item.get("id"),
+                            "project_id": item.get("project_id"),
+                            "name": item.get("name") or item.get("sample_name"),
+                        }
+                        for item in samples[:5]
+                    ],
+                    "confirmation_required": True,
+                })
+            else:
+                ambiguity_warnings.append(
+                    f"编号 {identifier} 在当前授权范围内未找到匹配样品。"
+                )
+                matches.append({
+                    "identifier": identifier,
+                    "match_status": "NO_MATCH",
+                    "confirmation_required": False,
+                })
+        return {
+            "status": "ok" if matches else "no_match",
+            "analysis_type": "result_association",
+            "matches": matches,
+            "warnings": ambiguity_warnings,
+            "write_policy": "NO_WRITE",
+        }
+
+    def _spectrum_feature_scan(
+        self,
+        ctx: UserContext,
+        args: dict[str, Any],
+        message: str,
+    ) -> dict[str, Any]:
+        keyword = str(args.get("keyword") or "").strip()
+        if not keyword:
+            identifiers = _EXPLICIT_IDENTIFIER.findall(message)
+            keyword = identifiers[-1] if identifiers else ""
+        result = self.registry.execute(
+            "list_samples_for_analysis",
+            keyword=keyword,
+            limit=50,
+            ctx=ctx,
+        )
+        samples = list(result.get("samples") or [])
+        spectrum_keywords = (
+            "DSC", "TGA", "粒径", "谱图", "显微", "热重", "差示扫描",
+            "熔点", "分解温度", "玻璃化转变",
+        )
+        matched_fields = []
+        for sample in samples:
+            for key, value in sample.items():
+                if not isinstance(value, (int, float, str)):
+                    continue
+                if any(kw.lower() in str(key).lower() for kw in spectrum_keywords):
+                    matched_fields.append({
+                        "sample_id": sample.get("sample_id") or sample.get("id"),
+                        "field": key,
+                        "value": value,
+                    })
+        if matched_fields:
+            return {
+                "status": "ok",
+                "analysis_type": "spectrum_feature_query",
+                "feature_count": len(matched_fields),
+                "features": matched_fields[:50],
+                "warnings": [],
+            }
+        return {
+            "status": "no_structured_features",
+            "analysis_type": "spectrum_feature_query",
+            "feature_count": 0,
+            "features": [],
+            "warnings": [
+                "当前授权数据中未找到图谱/曲线的结构化特征值；"
+                "展示版不支持图像识别，无法从图片文件自动提取特征。"
+            ],
+        }
+
+    def _cross_project_asset_scan(
+        self,
+        ctx: UserContext,
+        args: dict[str, Any],
+        message: str,
+    ) -> dict[str, Any]:
+        result = self.registry.execute(
+            "list_samples_for_analysis",
+            keyword="",
+            limit=100,
+            ctx=ctx,
+        )
+        samples = list(result.get("samples") or [])
+        projects: dict[str, dict[str, Any]] = {}
+        for sample in samples:
+            project_id = str(
+                sample.get("project_id") or sample.get("project") or "unknown"
+            )
+            if project_id not in projects:
+                projects[project_id] = {
+                    "project_id": project_id,
+                    "sample_count": 0,
+                    "assets": [],
+                }
+            projects[project_id]["sample_count"] += 1
+        for project in projects.values():
+            if project["sample_count"] > 0:
+                project["assets"].append({
+                    "asset_type": "historical_samples",
+                    "count": project["sample_count"],
+                    "access": "READ_ONLY",
+                    "source": "external_mysql",
+                })
+        return {
+            "status": "ok",
+            "analysis_type": "cross_project_asset_query",
+            "project_count": len(projects),
+            "projects": list(projects.values()),
+            "write_policy": "NO_WRITE",
+            "warnings": [],
+        }
+
     @staticmethod
     def _samples_using_material(
         source: dict[str, Any], material_name: str
@@ -761,6 +1008,23 @@ class HybridResearchQASkill:
             return [
                 "现象/竞品与结构化样品之间没有专用实体映射；向量证据只作主题证据，"
                 "不得直接视为某条 MySQL 记录。"
+            ]
+        if scenario_id == 15:
+            return [
+                "展示版仅生成检测结果关联建议，不写入业务数据库；"
+                "歧义或多候选时必须由用户确认后才能形成正式关联。",
+                *list(mysql_result.get("warnings") or []),
+            ]
+        if scenario_id == 16:
+            return [
+                "展示版仅查询已有结构化图谱/曲线特征值，不做图像识别或 OCR；"
+                "无结构化特征时明确降级，不从图片推测数值。",
+                *list(mysql_result.get("warnings") or []),
+            ]
+        if scenario_id == 20:
+            return [
+                "跨项目资产仅做当前权限范围内只读查询，不做资产迁移、授权变更或写入。",
+                *list(mysql_result.get("warnings") or []),
             ]
         return list(mysql_result.get("warnings") or [])
 

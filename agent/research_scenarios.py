@@ -47,13 +47,12 @@ RESEARCH_WORKFLOWS: dict[str, dict[str, Any]] = {
     "result_feature_ingestion": {
         "display_name": "结果自动关联与特征接入",
         "scenario_ids": [15, 16],
-        "execution_status": "PLANNED_STAGE_5",
+        "execution_status": "SUPPORTED_DISPLAY",
         "steps": [
-            "read_external_or_uploaded_result",
+            "parse_result_or_spectrum_request",
             "match_sample_experiment_formula",
-            "extract_features",
-            "human_review",
-            "register_pending_record",
+            "query_existing_structured_features",
+            "generate_pending_confirmation_or_degradation",
         ],
     },
     "historical_analysis": {
@@ -90,16 +89,24 @@ RESEARCH_WORKFLOWS: dict[str, dict[str, Any]] = {
             "final_report",
         ],
     },
-    "closed_loop_asset": {
-        "display_name": "模型实验闭环与跨项目复用",
-        "scenario_ids": [19, 20],
-        "execution_status": "PLANNED_STAGE_5",
+    "experiment_loopback": {
+        "display_name": "实验回流接口预留",
+        "scenario_ids": [19],
+        "execution_status": "INTERFACE_RESERVED",
         "steps": [
-            "identify_returned_experiment",
-            "create_dataset_version",
-            "train_challenger",
-            "human_approval",
-            "publish_reusable_asset",
+            "route_to_reserved_interface",
+            "return_not_yet_available",
+        ],
+    },
+    "cross_project_query": {
+        "display_name": "跨项目资产只读查询",
+        "scenario_ids": [20],
+        "execution_status": "SUPPORTED_DISPLAY",
+        "steps": [
+            "resolve_permission_scope",
+            "list_authorized_projects_and_assets",
+            "filter_by_target_project",
+            "return_read_only_summary",
         ],
     },
 }
@@ -172,6 +179,9 @@ def resolve_research_scenario(
             "historical_analysis",
             "process_window",
             "stage_report",
+            "result_feature_ingestion",
+            "experiment_loopback",
+            "cross_project_query",
         },
         "write_policy": "NO_WRITE" if workflow_id in {
             "hybrid_search_rank",
@@ -180,6 +190,9 @@ def resolve_research_scenario(
             "historical_analysis",
             "process_window",
             "stage_report",
+            "result_feature_ingestion",
+            "experiment_loopback",
+            "cross_project_query",
         } else "HUMAN_APPROVAL_REQUIRED",
         "boundary": _boundary_for(workflow_id),
     }
@@ -208,6 +221,10 @@ def looks_like_hybrid_research_request(message: str) -> bool:
         "原料使用效果", "原料替代", "替代历史", "失败配方", "失败实验",
         "异常案例", "失效案例", "竞品对标", "新项目冷启动", "项目知识问答",
         "去年做过", "为什么停用",
+        "实验回流", "模型版本", "模型更新", "Challenger",
+        "检测结果", "测试结果", "LIMS",
+        "图谱", "曲线", "DSC", "TGA", "粒径", "谱图", "显微图",
+        "跨项目复用", "跨项目", "其他项目复用",
     )
     return any(marker in text for marker in markers)
 
@@ -224,6 +241,14 @@ def _requested_scenario_id(args: Mapping[str, Any]) -> int | None:
 def _classify_message(text: str, args: Mapping[str, Any]) -> int:
     if _looks_like_stage4_analysis_request(text):
         return _stage4_scenario(text)
+    if _looks_like_experiment_loopback_request(text):
+        return 19
+    if _looks_like_result_association_request(text):
+        return 15
+    if _looks_like_spectrum_curve_request(text):
+        return 16
+    if _looks_like_cross_project_request(text):
+        return 20
     if any(marker in text for marker in ("新项目冷启动", "新项目立项", "首轮方案", "从零开始")):
         return 14
     if "为什么" in text and "停用" in text:
@@ -255,6 +280,47 @@ def _classify_message(text: str, args: Mapping[str, Any]) -> int:
     if any(marker in text for marker in ("项目知识", "项目问答", "为什么停用", "去年")):
         return 17
     return 1
+
+
+def _looks_like_experiment_loopback_request(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "实验回流", "结果回流", "数据回流", "模型版本", "模型更新",
+            "重新训练", "重训模型", "Challenger", "挑战者模型", "模型晋级",
+        )
+    )
+
+
+def _looks_like_result_association_request(text: str) -> bool:
+    if any(
+        marker in text
+        for marker in (
+            "检测结果自动关联", "测试结果自动关联", "LIMS结果关联",
+            "LIMS结果回样品", "检测结果错配", "结果自动关联",
+        )
+    ):
+        return True
+    return ("检测结果" in text or "测试结果" in text) and any(
+        marker in text for marker in ("关联", "匹配", "对应样品", "对应实验")
+    )
+
+
+def _looks_like_spectrum_curve_request(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "图谱", "曲线", "DSC", "TGA", "粒径分布", "谱图",
+            "显微图", "差示扫描", "热重分析",
+        )
+    )
+
+
+def _looks_like_cross_project_request(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in ("跨项目复用", "跨项目", "其他项目复用", "复用资产", "资产复用")
+    )
 
 
 def _looks_like_similarity_phrase(text: str) -> bool:
@@ -359,9 +425,10 @@ def _boundary_for(workflow_id: str) -> str:
         ),
         "evidence_profile": "画像结论仅覆盖当前授权项目和返回证据，不推断未记录实验。",
         "research_cold_start": "首轮方案仅用于研发起点，正式实验前必须经过可行性与安全审查。",
-        "result_feature_ingestion": "结果与特征登记需要人工审核，本阶段仅保留工作流位置。",
+        "result_feature_ingestion": "展示版仅生成关联建议或查询已有结构化特征，不写入业务数据库；歧义时需用户确认。",
         "historical_analysis": "统计结论必须绑定样本范围、字段和单位；相关性不得写成因果。",
         "process_window": "窗口结论必须同时给出可行区间、支撑样本和稳健性，不外推历史可行域。",
         "stage_report": "报告必须绑定授权范围和证据记录；不得把推测写成已验证结论。",
-        "closed_loop_asset": "数据版本、模型晋级和跨项目复用必须人工审批；本阶段仅保留工作流位置。",
+        "experiment_loopback": "实验回流正式闭环暂未开放，当前仅预留接口，不会修改数据或模型。",
+        "cross_project_query": "跨项目资产仅做权限范围内只读查询，不做资产迁移或写入。",
     }[workflow_id]
