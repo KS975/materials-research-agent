@@ -6,6 +6,7 @@ from functools import lru_cache
 from agent.core import AgentCore
 from agent.engine_tool_registration import register_engine_tools
 from agent.engine_workflow_adapter import EngineWorkflowAdapter
+from agent.evidence_context import EvidenceContextCompressor
 from agent.material_tool_registration import register_material_tools
 from agent.vector_search import (
     ExternalVectorAPIGateway,
@@ -220,6 +221,11 @@ class ApplicationContainer:
             material_intelligence=self.hybrid_material_intelligence_skill,
             attachment_store=self.chat_attachment_store,
             max_vector_hits=settings.knowledge_rag_max_hits,
+            context_compressor=EvidenceContextCompressor(
+                max_records=settings.hybrid_qa_max_llm_records,
+                max_chars=settings.hybrid_qa_max_llm_chars,
+                max_value_chars=settings.hybrid_qa_max_llm_value_chars,
+            ),
         )
 
         self.core = AgentCore(

@@ -47,5 +47,8 @@ app.include_router(skills_router)
 async def bind_request_credentials(request, call_next):
     """Expose the platform credential only inside this request scope."""
 
-    with request_authorization_scope(request.headers.get("authorization")):
+    with request_authorization_scope(
+        request.headers.get("authorization"),
+        request.headers.get("company-id"),
+    ):
         return await call_next(request)

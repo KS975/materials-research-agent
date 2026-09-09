@@ -95,7 +95,9 @@ def test_hybrid_research_unifies_sources_before_synthesis():
     assert frame["source_summary"]["mysql"] > 0
     assert frame["source_summary"]["vector_api"] == 1
     assert frame["source_summary"]["dialog"] == 1
-    assert "EVIDENCE FRAME" in llm.calls[0][1]
+    assert "COMPACT EVIDENCE CONTEXT" in llm.calls[0][1]
+    assert result["synthesis"]["status"] == "ok"
+    assert result["synthesis"]["context_selection"]["total_records"] > 0
     assert result["evidence"][0]["record_id"]
 
 
@@ -123,6 +125,62 @@ def test_hybrid_research_degrades_vector_failure_to_structured_evidence():
     assert result["vector_result"]["status"] == "vector_unavailable"
     assert result["evidence_frame"]["source_summary"].get("vector_api", 0) == 0
     assert any("向量证据源不可用" in item for item in result["warnings"])
+
+
+def test_hybrid_research_retries_with_smaller_context_before_degradation():
+    class TimeoutThenSuccessLLM:
+        def __init__(self):
+            self.prompts = []
+
+        def complete(self, system, user):
+            self.prompts.append(user)
+            if len(self.prompts) == 1:
+                raise TimeoutError("read timeout")
+            return "综合结论：第二次有界上下文生成成功。"
+
+    llm = TimeoutThenSuccessLLM()
+    skill = HybridResearchQASkill(
+        registry=FakeRegistry(),
+        llm=llm,
+        material_intelligence=SimpleNamespace(execute_intent=lambda *args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    result = skill.answer(
+        message="查 EXP-128，并结合历史资料。",
+        tool_args={"project_id": 115, "identifier": "EXP-128"},
+        ctx=_ctx(),
+    )
+
+    assert result["synthesis"]["status"] == "ok"
+    assert [item["status"] for item in result["synthesis"]["attempts"]] == [
+        "failed",
+        "ok",
+    ]
+    assert len(llm.prompts[1]) < len(llm.prompts[0])
+
+
+def test_hybrid_research_deterministic_fallback_keeps_structured_gap():
+    class FailingLLM:
+        def complete(self, system, user):
+            raise TimeoutError("read timeout")
+
+    skill = HybridResearchQASkill(
+        registry=FakeRegistry(),
+        llm=FailingLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=lambda *args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    result = skill.answer(
+        message="查 EXP-128，并结合历史资料。",
+        tool_args={"project_id": 115, "identifier": "EXP-128"},
+        ctx=_ctx(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["synthesis"]["status"] == "degraded"
+    assert result["synthesis"]["mode"] == "deterministic_evidence_summary"
+    assert "LLM 综合未完成" in result["answer"]
+    assert any("LLM 综合失败" in item for item in result["warnings"])
 
 
 def test_hybrid_research_reuses_structured_similarity_workflow():

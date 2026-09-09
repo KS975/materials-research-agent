@@ -8,7 +8,10 @@ from uuid import uuid4
 
 import httpx
 
-from runtime.request_credentials import get_request_authorization
+from runtime.request_credentials import (
+    get_request_authorization,
+    get_request_platform_company_id,
+)
 from schemas.user_context import UserContext
 
 
@@ -310,7 +313,9 @@ class VectorSearchService:
             "score_threshold": threshold,
             "acting_user_id": ctx.user_id,
             "user_id": ctx.user_id,
-            "header_company_id": ctx.company_id,
+            "header_company_id": (
+                get_request_platform_company_id() or ctx.company_id
+            ),
             "organization_id": ctx.organization_id,
             "filter_user_id": self.filter_by_user,
         }

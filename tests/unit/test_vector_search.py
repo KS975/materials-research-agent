@@ -224,6 +224,31 @@ def test_external_vector_test_scope_separates_header_and_query_company():
     assert any("测试数据范围" in warning for warning in result["warnings"])
 
 
+def test_external_vector_uses_platform_request_company_header():
+    gateway = FakeGateway([], provider="external_vector_api")
+    service = VectorSearchService(
+        gateway=gateway,
+        external_query_company_id="test-company-id",
+    )
+    ctx = UserContext(
+        user_id="local-user",
+        company_id="business-company-a",
+        project_ids=(),
+        all_projects=True,
+        permission_source="test",
+    )
+
+    with request_authorization_scope(
+        "Bearer platform-token",
+        "platform-company-a",
+    ):
+        result = service.search(query="EXP-128", ctx=ctx, limit=5)
+
+    assert gateway.requests[0]["header_company_id"] == "platform-company-a"
+    assert gateway.requests[0]["company_id"] == "test-company-id"
+    assert result["status"] == "ok"
+
+
 def test_external_gateway_always_sends_required_query_text():
     captured = {}
 

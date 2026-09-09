@@ -90,5 +90,6 @@ tests/unit/test_hybrid_research_routing.py
 | 直接调用受管 `search_vector_knowledge` | 通过 | `provider=external_vector_api`，命中 5 条，score 约 0.543-0.664 |
 | Hybrid Research QA 证据链 | 通过 | MySQL `ok`，外部向量 `ok`；EvidenceFrame 来源计数 `mysql=200`、`vector_api=5`、`dialog=1` |
 | 平台登录公司校验 | 通过 | Token 所属公司与 Header 公司一致，项目模式为 `company_all_projects` |
+| Hybrid QA LLM 稳定化 | 通过 | 真实链路 `SUCCEEDED`；MySQL `ok`、向量 `ok=5`、LLM 首次成功；压缩上下文 8,005 字符 / 22 条记录，最终报告 1,236 字符 |
 
-本轮真实 LLM 综述出现一次 `ReadTimeout`；使用固定摘要器复跑证明 MySQL、外部向量与 EvidenceFrame 链路本身正常。该超时记录为 LLM 服务稳定性问题，不用推测填补证据。
+此前真实 LLM 综述曾出现一次 `ReadTimeout`；使用固定摘要器复跑证明 MySQL、外部向量与 EvidenceFrame 链路本身正常。2026-09-09 切片 1 已增加有界证据上下文、一次降容重试和确定性降级报告，真实端到端复测不再超时。生产配置禁止非空 `EXTERNAL_VECTOR_QUERY_COMPANY_ID`。

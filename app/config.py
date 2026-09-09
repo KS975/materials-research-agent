@@ -120,6 +120,12 @@ class Settings(BaseSettings):
     # this value changes only the external service's companyId query filter.
     external_vector_query_company_id: str = ""
 
+    # Hybrid Research QA keeps the full auditable frame in the API response,
+    # but sends only a bounded, source-balanced view to the LLM.
+    hybrid_qa_max_llm_records: int = 80
+    hybrid_qa_max_llm_chars: int = 24_000
+    hybrid_qa_max_llm_value_chars: int = 1_200
+
     # V0.1.2 T06: historical RAG retrieval guardrails
     knowledge_rag_score_threshold: float = 0.42
     knowledge_rag_max_hits: int = 5
@@ -204,6 +210,21 @@ class Settings(BaseSettings):
             raise ValueError("ENGINE_TASK_MODE 仅支持 sync 或 async")
         if self.tool_audit_enabled and not self.tool_audit_dir.strip():
             raise ValueError("TOOL_AUDIT_DIR 不能为空")
+        if not 10 <= self.hybrid_qa_max_llm_records <= 300:
+            raise ValueError("HYBRID_QA_MAX_LLM_RECORDS 必须在10到300之间")
+        if not 4_000 <= self.hybrid_qa_max_llm_chars <= 80_000:
+            raise ValueError("HYBRID_QA_MAX_LLM_CHARS 必须在4000到80000之间")
+        if not 120 <= self.hybrid_qa_max_llm_value_chars <= 5_000:
+            raise ValueError("HYBRID_QA_MAX_LLM_VALUE_CHARS 必须在120到5000之间")
+        if (
+            self.app_env.casefold() in {"production", "prod"}
+            and self.vector_search_provider == "external_api"
+            and self.external_vector_query_company_id.strip()
+        ):
+            raise ValueError(
+                "生产环境禁止设置 EXTERNAL_VECTOR_QUERY_COMPANY_ID；"
+                "请留空并使用当前登录公司的平台请求头"
+            )
         if not 1 <= self.tool_audit_retries <= 5:
             raise ValueError("TOOL_AUDIT_RETRIES 必须在1到5之间")
         if not 100_000 <= self.chat_ui_workflow_max_response_chars <= 10_000_000:

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from typing import Any
 
 from agent.evidence_frame import EvidenceFrameBuilder
+from agent.evidence_context import EvidenceContextCompressor
 from agent.research_scenarios import resolve_research_scenario
 from llm.base import LLMProvider
 from runtime.chat_attachments import ChatAttachmentStore
@@ -38,6 +38,7 @@ class HybridResearchQASkill:
         attachment_store: ChatAttachmentStore,
         vector_tool_name: str = "search_vector_knowledge",
         max_vector_hits: int = 5,
+        context_compressor: EvidenceContextCompressor | None = None,
     ) -> None:
         self.registry = registry
         self.llm = llm
@@ -45,6 +46,7 @@ class HybridResearchQASkill:
         self.attachment_store = attachment_store
         self.vector_tool_name = vector_tool_name
         self.max_vector_hits = max(1, min(int(max_vector_hits), 50))
+        self.context_compressor = context_compressor or EvidenceContextCompressor()
 
     def answer(
         self,
@@ -182,7 +184,7 @@ class HybridResearchQASkill:
             source_summary=frame.source_summary,
         )
 
-        answer = self._synthesize(message=message, frame=frame)
+        answer, synthesis = self._synthesize(message=message, frame=frame)
         emit_progress(
             "hybrid_final_report",
             "completed",
@@ -201,6 +203,10 @@ class HybridResearchQASkill:
             *list(vector_result.get("warnings") or []),
             *mysql_warnings,
         ]
+        if synthesis["status"] == "degraded":
+            warnings.append(
+                "LLM 综合失败，已降级为后端确定性证据摘要；跨源综合结论需重新生成。"
+            )
         source_types = set(frame.source_summary)
         status = "ok" if frame.records else "no_evidence"
         if source_types and source_types <= {"dialog"}:
@@ -209,6 +215,7 @@ class HybridResearchQASkill:
         return {
             "status": status,
             "answer": answer,
+            "synthesis": synthesis,
             "analysis_type": "hybrid_research_qa",
             "query": query,
             "research_workflow": research_workflow,
@@ -530,10 +537,15 @@ class HybridResearchQASkill:
             return " ".join([*parts, suffix.get(scenario_id, "")]).strip()
         return default_query
 
-    def _synthesize(self, *, message: str, frame) -> str:
-        payload = frame.model_dump(mode="json")
+    def _synthesize(self, *, message: str, frame) -> tuple[str, dict[str, Any]]:
+        emit_progress(
+            "llm_synthesis",
+            "running",
+            "生成混合研究综合报告",
+            "正在基于压缩证据视图生成最终报告。",
+        )
         system = """你是材数智能体的混合研究问答器。
-输入的 EVIDENCE FRAME 已由后端完成来源归一、权限过滤、基础实体对齐和冲突标记。
+输入的 COMPACT EVIDENCE CONTEXT 已由后端完成来源归一、权限过滤、基础实体对齐、冲突标记和有界压缩。
 
 要求：
 1. 不要先分别写“数据库答案”和“RAG答案”，必须围绕用户问题给综合结论。
@@ -543,10 +555,120 @@ class HybridResearchQASkill:
 5. 证据不足时明确写缺口；不得编造实验、性能、原料或历史结论。
 6. 相关性不得写成因果。
 7. 最终回答包含：结论、证据依据、风险/缺口。不要暴露内部表名、SQL、凭证或向量服务地址。
+8. selection.omitted_records 大于 0 时，不得推断被省略证据的内容。
 回答中文，结构简洁。
 """
-        user = f"用户问题：{message}\n\nEVIDENCE FRAME:\n{json.dumps(payload, ensure_ascii=False, default=str)}"
-        return self.llm.complete(system, user)
+        attempts: list[dict[str, Any]] = []
+        last_error_type = ""
+        for aggressive in (False, True):
+            context, serialized = self.context_compressor.build(
+                frame=frame,
+                query=message,
+                aggressive=aggressive,
+            )
+            user = (
+                f"用户问题：{message}\n\n"
+                f"COMPACT EVIDENCE CONTEXT:\n{serialized}"
+            )
+            try:
+                answer = self.llm.complete(system, user)
+            except Exception as exc:
+                last_error_type = type(exc).__name__
+                attempts.append(
+                    {
+                        "status": "failed",
+                        "aggressive_retry": aggressive,
+                        "error_type": last_error_type,
+                        "context_chars": len(user),
+                        "selected_records": context["selection"]["selected_records"],
+                    }
+                )
+                continue
+            attempts.append(
+                {
+                    "status": "ok",
+                    "aggressive_retry": aggressive,
+                    "context_chars": len(user),
+                    "selected_records": context["selection"]["selected_records"],
+                }
+            )
+            emit_progress(
+                "llm_synthesis",
+                "completed",
+                "LLM 综合报告已生成",
+                "报告已基于有界证据上下文生成。",
+                context_chars=len(user),
+            )
+            return answer, {
+                "status": "ok",
+                "mode": "llm_compact_context",
+                "attempts": attempts,
+                "context_selection": context["selection"],
+            }
+
+        answer = self._fallback_report(message=message, frame=frame)
+        emit_progress(
+            "llm_synthesis",
+            "degraded",
+            "LLM 综合未完成",
+            f"模型综合两次未完成（{last_error_type}），已返回后端确定性证据摘要。",
+            error_type=last_error_type,
+        )
+        return answer, {
+            "status": "degraded",
+            "mode": "deterministic_evidence_summary",
+            "attempts": attempts,
+            "error_type": last_error_type,
+        }
+
+    def _fallback_report(self, *, message: str, frame) -> str:
+        lines = [
+            "结论：LLM 综合未完成，本轮仅能给出后端保留下来的确定性证据摘要；不进行跨源推断。",
+            f"研究问题：{message}",
+            f"证据来源：{self._source_summary_text(frame)}",
+        ]
+        selected = self._fallback_records(frame)
+        if selected:
+            lines.append("代表性证据：")
+            lines.extend(
+                f"- [{record.record_id}] {record.subject_id} / "
+                f"{record.attribute} = {record.value}"
+                f"{f' {record.unit}' if record.unit else ''} "
+                f"({record.source_type.value})"
+                for record in selected
+            )
+        else:
+            lines.append("代表性证据：无。")
+        if frame.conflicts:
+            lines.append(
+                f"冲突证据：{len(frame.conflicts)} 组，"
+                "已全部保留在 EvidenceFrame 中，未静默取舍。"
+            )
+        lines.append("缺口：LLM 综合失败，跨源结论需要重新生成；各来源证据可继续追溯。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _fallback_records(frame):
+        mysql = [
+            record for record in frame.records if record.source_type.value == "mysql"
+        ][:12]
+        vectors = [
+            record
+            for record in frame.records
+            if record.source_type.value == "vector_api"
+        ][:5]
+        uploads = [
+            record for record in frame.records if record.source_type.value == "upload"
+        ][:3]
+        return [*mysql, *vectors, *uploads]
+
+    @staticmethod
+    def _source_summary_text(frame) -> str:
+        if not frame.source_summary:
+            return "无"
+        return "，".join(
+            f"{source}={count}" for source, count in frame.source_summary.items()
+        )
 
     def _resolve_scope(
         self,
