@@ -140,6 +140,29 @@ SCENARIO_NAMES: dict[int, str] = {
     for scenario_id in workflow["scenario_ids"]
 }
 
+_REQUIRED_DIMENSIONS_BY_SCENARIO: dict[int, tuple[str, ...]] = {
+    1: ("formula", "documents"),
+    2: ("formula", "process", "performance", "documents"),
+    3: ("performance", "formula"),
+    4: ("formula", "process", "performance", "documents"),
+    5: ("formula", "performance", "documents"),
+    6: ("formula", "performance", "documents"),
+    7: ("formula", "performance", "status", "documents"),
+    8: ("dataset", "formula", "process", "performance"),
+    9: ("dataset", "formula", "process", "performance"),
+    10: ("dataset", "formula", "process", "performance"),
+    11: ("dataset", "formula", "process", "performance"),
+    12: ("sample", "documents"),
+    13: ("sample", "performance", "documents"),
+    14: ("formula", "process", "performance", "documents"),
+    15: ("result_association", "sample"),
+    16: ("spectrum", "sample"),
+    17: ("project", "documents"),
+    18: ("project", "dataset", "performance", "documents"),
+    19: ("dataset", "model", "performance"),
+    20: ("project", "assets"),
+}
+
 _EXPLICIT_IDENTIFIER = re.compile(
     r"(?<![A-Za-z0-9_.-])(?:[A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*|\d{2,})"
     r"(?![A-Za-z0-9_.-])"
@@ -163,6 +186,7 @@ def resolve_research_scenario(
 
     workflow_id = _workflow_id_for_scenario(scenario_id)
     workflow = RESEARCH_WORKFLOWS[workflow_id]
+    needed_dimensions = _needed_dimensions(scenario_id, text)
     return {
         "schema_version": RESEARCH_WORKFLOW_VERSION,
         "workflow_id": workflow_id,
@@ -172,6 +196,8 @@ def resolve_research_scenario(
         "execution_status": workflow["execution_status"],
         "covered_scenario_ids": list(workflow["scenario_ids"]),
         "steps": list(workflow["steps"]),
+        "needed_dimensions": needed_dimensions,
+        "answer_format": _answer_format(scenario_id, text),
         "read_only": workflow_id in {
             "hybrid_search_rank",
             "evidence_profile",
@@ -196,6 +222,63 @@ def resolve_research_scenario(
         } else "HUMAN_APPROVAL_REQUIRED",
         "boundary": _boundary_for(workflow_id),
     }
+
+
+def _needed_dimensions(scenario_id: int, text: str) -> list[str]:
+    dimensions = list(_REQUIRED_DIMENSIONS_BY_SCENARIO.get(scenario_id, ()))
+    if scenario_id in {1, 2, 4, 5, 6, 7, 12, 13, 14}:
+        if "工艺" in text or "流程" in text or "条件" in text:
+            dimensions = _append_dimension(dimensions, "process")
+        if "性能" in text or "指标" in text or "物性" in text:
+            dimensions = _append_dimension(dimensions, "performance")
+        if "配方" in text or "原料" in text or "组分" in text:
+            dimensions = _append_dimension(dimensions, "formula")
+    if scenario_id in {8, 10}:
+        for metric in _extract_metric_terms(text):
+            if any(
+                marker in metric
+                for marker in ("温度", "时间", "压力", "转速", "速度", "工序", "工艺")
+            ):
+                dimensions = _append_dimension(dimensions, "process")
+            elif any(
+                marker in metric
+                for marker in ("含量", "用量", "添加", "配比", "组分", "原料")
+            ):
+                dimensions = _append_dimension(dimensions, "formula")
+            else:
+                dimensions = _append_dimension(dimensions, "performance")
+    return _dedupe(dimensions)
+
+
+def _answer_format(scenario_id: int, text: str) -> str:
+    if scenario_id in {8, 9, 10, 11, 17}:
+        return "analysis"
+    if scenario_id in {14, 18, 19}:
+        return "plan"
+    if any(
+        marker in text
+        for marker in ("为什么", "原因", "冲突", "权衡", "关键变量", "差异分析", "综合判断")
+    ):
+        return "analysis"
+    return "query"
+
+
+def _extract_metric_terms(text: str) -> list[str]:
+    return [
+        item
+        for item in re.split(r"[，。；;、\s]+", text)
+        if item
+    ]
+
+
+def _append_dimension(values: list[str], dimension: str) -> list[str]:
+    if dimension not in values:
+        values.append(dimension)
+    return values
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
 
 
 def looks_like_hybrid_research_request(message: str) -> bool:

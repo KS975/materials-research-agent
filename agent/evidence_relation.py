@@ -37,13 +37,13 @@ def build_source_relation(frame: Any, vector_result: dict[str, Any]) -> dict[str
 
     if entity_links:
         level = "ENTITY_LINKED"
-        warning = "向量片段已通过样品/实验 ID 与 MySQL 实体关联。"
+        warning = "知识片段已与对应样品或实验建立精确关联。"
     elif project_links:
         level = "PROJECT_LINKED"
-        warning = "向量片段与 MySQL 证据仅有项目级关联，不能推断同一样品或同一实验。"
+        warning = "知识片段仅关联到项目层级，不能视为对应某个样品或实验。"
     else:
         level = "TOPIC_ONLY"
-        warning = "向量证据与 MySQL 证据本轮仅主题级并列，未建立实体级关联。"
+        warning = "知识片段与结构化数据本轮仅主题相关，未建立精确关联，仅供参考。"
     return {
         "level": level,
         "mysql_evidence_level": "ENTITY_LEVEL",

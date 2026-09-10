@@ -292,7 +292,7 @@ class VectorSearchService:
             # organization/user. It does not expose a project dimension.
             if projects:
                 scope_warnings.append(
-                    "外部向量 API 不支持项目维度过滤，本次按公司授权范围检索。"
+                    "知识库暂不支持按项目筛选，本轮按公司授权范围检索。"
                 )
             projects = []
             configured_query_company = str(
@@ -301,8 +301,7 @@ class VectorSearchService:
             if configured_query_company:
                 query_company_id = configured_query_company
                 scope_warnings.append(
-                    "外部向量测试数据范围已启用：请求头保持当前登录公司，"
-                    f"向量 companyId 查询范围为 {configured_query_company}。"
+                    "当前使用测试知识库范围，检索结果仅用于功能验证。"
                 )
 
         request = {
@@ -374,15 +373,16 @@ class VectorSearchService:
         if truncated_count:
             authorized_hits = authorized_hits[:normalized_limit]
             warnings.append(
-                f"外部向量 API 返回结果已按本地上限截断：保留 {normalized_limit} 条，"
-                f"截断 {truncated_count} 条。"
+                f"知识片段较多，本轮保留最相关的 {normalized_limit} 条。"
             )
         if rejected:
             warnings.append(
-                f"外部向量 API 返回 {rejected} 条越权结果，已全部丢弃。"
+                f"有 {rejected} 条超出当前授权范围的知识片段已忽略。"
             )
         if low_score:
-            warnings.append(f"向量检索有 {low_score} 条结果低于阈值，已过滤。")
+            warnings.append(
+                f"有 {low_score} 条知识片段的相似度不足，已过滤。"
+            )
         return {
             "status": "ok",
             "provider": self.gateway.name(),

@@ -25,7 +25,7 @@ import {
 } from "./v020_api";
 import { getAutonomyStatus, operatorOverride } from "./v030_api";
 import { getMondayDemoStatus } from "./demo_api";
-import { createInitialAnalysisStep, mergeProgressStep } from "./progress";
+import { createInitialAnalysisStep, mergeProgressPhases, mergeProgressStep } from "./progress";
 import DatabaseNavigator from "./DatabaseNavigator";
 import ChatHistoryPanel from "./ChatHistoryPanel";
 import MarkdownView, { CopyControl } from "./MarkdownView";
@@ -728,13 +728,14 @@ function AnalysisProgress({steps=[],live=false}){
     message:"正在建立受控分析链路…",
     elapsed_ms:0,
   }];
+  const phases=mergeProgressPhases(visible);
   const hasBackendEvents=visible.some(step=>step.source==="backend");
   const syncFallback=visible.some(step=>step.transport==="sync_fallback");
   const hasFailure=visible.some(step=>step.status==="failed");
-  const completed=visible.filter(x=>x.status==="completed").length;
-  const active=[...visible].reverse().find(step=>
+  const completed=phases.filter(x=>x.status==="completed").length;
+  const active=[...phases].reverse().find(step=>
     step.status==="running"||step.status==="retrying"
-  )||visible[visible.length-1];
+  )||phases[phases.length-1];
   const channelLabel=syncFallback
     ? "兼容模式"
     : hasBackendEvents
@@ -743,17 +744,23 @@ function AnalysisProgress({steps=[],live=false}){
   return <div className={`analysisProgress ${live?"live":"done"} ${hasFailure?"hasFailure":""}`}>
     <button className="analysisProgressHead" onClick={()=>setOpen(!open)}>
       <span><i className={live?"pulse":hasFailure?"failed":"complete"}/>{live?`正在：${active?.title||"分析问题"}`:"查询与分析详情"}</span>
-      <small>{channelLabel} · {live?`${completed}/${visible.length} 步完成`:`${visible.length} 条执行记录`} · {open?"收起":"展开"}</small>
+      <small>{channelLabel} · {live?`${completed}/${phases.length} 阶段完成`:`${phases.length} 个执行阶段`} · {open?"收起":"展开"}</small>
     </button>
     {open&&<div className="analysisTimeline">
-      {visible.map((step,index)=><div className={`analysisStep ${step.status||"running"}`} key={`${step.stage}-${index}`}>
+      {phases.map((phase,index)=><div className={`analysisStep ${phase.status||"running"}`} key={`${phase.phase_id}-${index}`}>
         <i/>
         <div>
-          <b>{step.title||step.stage}<em>{step.source==="backend"?"后端":"前端"}</em>{step.attempt!=null&&<em>第 {step.attempt} 次</em>}</b>
-          <p>{step.message}</p>
-          <AnalysisStepExtra step={step}/>
+          <b>{phase.title}<em>{phase.source_count} 项</em></b>
+          <p>{phase.message}</p>
+          <details className="analysisPhaseDetails">
+            <summary>查看内部步骤</summary>
+            {phase.children.map((step,childIndex)=><div className="analysisChildStep" key={`${step.stage}-${childIndex}`}>
+              <b>{step.title||step.stage}</b>
+              <span>{step.message}</span>
+            </div>)}
+          </details>
         </div>
-        <time>{typeof step.elapsed_ms==="number"?`${(step.elapsed_ms/1000).toFixed(1)}s`:""}</time>
+        <time>{phase.elapsed_ms?`${(phase.elapsed_ms/1000).toFixed(1)}s`:""}</time>
       </div>)}
       <p className="analysisBoundary">展示本轮实际查询对象、授权数据源、检索词、脱敏 SQL、命中证据和计算依据；不展示模型隐藏思维原文、系统提示词或数据库凭证。</p>
     </div>}
@@ -768,7 +775,7 @@ function Message({m,scope,onEngineTaskAction}){
     <div className="avatar">{m.role==="assistant"?<Logo/>:"你"}</div>
     <div className="msgcol">
       {m.role==="assistant" && <small>材数智能体</small>}
-<div className="bubble">{(m.pending||m.progress?.length>0)&&<AnalysisProgress steps={m.progress||[]} live={!!m.pending}/>}<EngineTaskCard task={m.engineTask} disabled={!onEngineTaskAction} onAction={action=>onEngineTaskAction?.(m.id,m.engineTask?.task_id,action)}/> {!isV020Feedback&&!isV030Autonomy&&m.content&&<div className="content">{m.role==="assistant"?<MarkdownView content={m.content}/>:m.content}</div>}<DataCards cards={m.data?.data_cards}/><EvidenceFrameCard status={m.data?.status} frame={m.data?.evidence_frame} evidence={m.evidence} intent={m.meta?.intent} warnings={m.data?.warnings}/><EngineWorkflowCard data={m.data}/><ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/>{showAnswerActions&&<div className="answerActions"><CopyControl value={m.content} label="复制答案"/></div>}<Detail m={m}/></div>
+<div className="bubble">{(m.pending||m.progress?.length>0)&&<AnalysisProgress steps={m.progress||[]} live={!!m.pending}/>}<EngineTaskCard task={m.engineTask} disabled={!onEngineTaskAction} onAction={action=>onEngineTaskAction?.(m.id,m.engineTask?.task_id,action)}/> {!isV020Feedback&&!isV030Autonomy&&m.content&&<div className="content answerSection">{m.role==="assistant"?<MarkdownView content={m.content}/>:m.content}</div>}<DataCards cards={m.data?.data_cards} warnings={m.data?.warnings}/><EvidenceFrameCard frame={m.data?.evidence_frame} evidence={m.evidence} intent={m.meta?.intent}/><EngineWorkflowCard data={m.data}/><ModelingCards data={m.data}/><OptimizationCards data={m.data}/><FeedbackCards data={m.data} scope={scope}/><AutonomyCards data={m.data} scope={scope}/><DemoCards data={m.data}/><CompanyDataCards data={m.data}/>{showAnswerActions&&<div className="answerActions"><CopyControl value={m.content} label="复制答案"/></div>}<Detail m={m}/></div>
     </div>
   </div>
 }
@@ -801,6 +808,7 @@ export default function App(){
   const [savedConversations,setSavedConversations]=useState([]);
   const [historyLoading,setHistoryLoading]=useState(false);
   const [historyError,setHistoryError]=useState("");
+  const [lastFailedQuery,setLastFailedQuery]=useState("");
   const end=useRef(null);
   const fileInput=useRef(null);
   const composerInput=useRef(null);
@@ -1057,7 +1065,7 @@ export default function App(){
       return;
     }
     const pendingId=id();
-    setText(""); setErr(""); setMessages(x=>[
+    setText(""); setErr(""); setLastFailedQuery(""); setMessages(x=>[
       ...x,
       {id:id(),role:"user",content:q},
       {id:pendingId,role:"assistant",content:"",pending:true,progress:[createInitialAnalysisStep()]},
@@ -1122,6 +1130,7 @@ export default function App(){
         pending:false,
         progress:mergeProgressStep(item.progress,failedStep),
       }:item));
+      setLastFailedQuery(q);
       setErr(String(e?.message||e||"未知错误"));
     }finally{setBusy(false)}
   }
@@ -1143,7 +1152,7 @@ export default function App(){
       <section className="scroll"><div className="inner">
         {messages.length===1&&<div className="quick"><small>可以试试</small><div>{quick.map(q=><button key={q.text} onClick={()=>runQuick(q)}><span>{q.label}</span><b>{q.text}</b></button>)}</div></div>}
         <div className="messages">{messages.map(m=><Message key={m.id} m={m} scope={scope} onEngineTaskAction={handleEngineTaskAction}/>)}{busy&&!messages.some(m=>m.pending)&&<div className="msg assistant"><div className="avatar"><Logo/></div><div className="msgcol"><small>材数智能体</small><div className="bubble loading">● ● ● <span>正在读取研发证据 / 运行优化算法</span></div></div></div>}</div>
-        {err&&<div className="error"><b>请求失败</b>{err}</div>}<div ref={end}/>
+        {err&&<div className="error"><b>请求失败</b><span>{err}</span>{lastFailedQuery&&<button type="button" disabled={busy||uploading} onClick={()=>send(lastFailedQuery)}>重试本轮问题</button>}</div>}<div ref={end}/>
       </div></section>
 
       <footer>

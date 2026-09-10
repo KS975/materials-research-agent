@@ -25,9 +25,21 @@ def test_material_usage_slots_have_backend_fallback_extraction():
 
 
 def test_direct_substitution_phrase_extracts_original_and_replacement():
-    assert extract_substitution_materials(
-        "查找 P507+煤油 替代 水的历史记录，并结合历史资料。"
-    ) == ("P507+煤油", "水")
+    args = normalize_research_slots(
+        message="查找 P507+煤油 替代 水的历史记录，并结合历史资料。",
+        args={
+            "identifier": "P507",
+            "left_identifier": "P507",
+            "right_identifier": "507",
+        },
+    )
+    assert (
+        args["original_material"],
+        args["replacement_material"],
+    ) == ("水", "P507+煤油")
+    assert "identifier" not in args
+    assert "left_identifier" not in args
+    assert "right_identifier" not in args
 
 
 def test_reversed_substitution_phrase_removes_non_material_suffixes():

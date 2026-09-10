@@ -35,15 +35,47 @@ export function evidenceMetricRows(frame){
 export function normalizedEvidenceRecords({frame,evidence}={}){
   const fromFrame=Array.isArray(frame?.records)?frame.records:[];
   const source=fromFrame.length?fromFrame:(Array.isArray(evidence)?evidence:[]);
-  return source.slice(0,30).map(record=>({
+  return source.map(record=>({
     record_id:record.record_id,
     source_type:record.source_type,
     subject_id:record.subject_id,
     entity_type:record.entity_type,
     attribute:record.attribute,
+    value:record.value,
+    unit:record.unit,
     confidence:record.confidence,
     authority_level:record.authority_level,
     conflict_group:record.conflict_group,
     source_uri:record.source_uri,
+    metadata:record.metadata||{},
   }));
+}
+
+export function structuredEvidenceGroups(records){
+  const grouped=new Map();
+  for(const record of Array.isArray(records)?records:[]){
+    if(record.source_type!=="mysql")continue;
+    if(["record_reference","status"].includes(record.attribute))continue;
+    const key=record.subject_id||record.entity_type||"unknown";
+    if(!grouped.has(key)){
+      grouped.set(key,{
+        key,
+        subject_id:record.subject_id,
+        entity_type:record.entity_type,
+        rows:[],
+      });
+    }
+    const group=grouped.get(key);
+    const rowKey=`${record.attribute}|${record.value}`;
+    if(!group.rows.some(row=>row._key===rowKey)){
+      group.rows.push({_key:rowKey,attribute:record.attribute,value:record.value,unit:record.unit});
+    }
+  }
+  return [...grouped.values()];
+}
+
+export function documentEvidenceRecords(records){
+  return (Array.isArray(records)?records:[]).filter(record=>
+    ["vector_api","upload"].includes(record.source_type)
+  );
 }

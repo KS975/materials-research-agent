@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -16,6 +17,7 @@ from agent.research_analysis import (
 from agent.scenario_aggregator import (
     aggregate_scenario_result,
     build_data_cards,
+    build_dimension_status,
     serialize_aggregated_summary,
 )
 from agent.research_scenarios import resolve_research_scenario
@@ -23,6 +25,7 @@ from agent.research_slots import normalize_research_slots, parse_target_filters
 from llm.base import LLMProvider
 from runtime.chat_attachments import ChatAttachmentStore
 from runtime.progress import emit_progress
+from runtime.research_execution_audit import record_research_execution
 from schemas.user_context import UserContext
 from skills.material_intelligence import MaterialIntelligenceSkill
 
@@ -78,6 +81,7 @@ _SCENARIO_VECTOR_KEYWORDS: dict[int, tuple[str, ...]] = {
     18: ("阶段总结", "阶段报告"),
     20: ("跨项目", "复用"),
 }
+logger = logging.getLogger(__name__)
 
 
 
@@ -215,7 +219,8 @@ class HybridResearchQASkill:
                     "warnings": [f"向量检索不可用：{type(exc).__name__}"],
                 }
                 vector_warnings.append(
-                    "向量证据源不可用，本轮仅能基于结构化事实和当前输入回答；不会用推测填补资料缺口。"
+                    "知识资料源暂不可用，本轮仅能基于结构化事实和当前输入回答；"
+                    "不会用推测填补资料缺口。"
                 )
                 emit_progress(
                     "vector_evidence_recall",
@@ -302,6 +307,14 @@ class HybridResearchQASkill:
                 vector_result=vector_result,
                 analysis_result=analysis_result,
             )
+            aggregated_summary.update(
+                build_dimension_status(
+                    aggregated_summary,
+                    research_workflow.get("needed_dimensions"),
+                    vector_result=vector_result,
+                    upload_count=len(attachments),
+                )
+            )
             aggregated_record_id = builder.add_derived_result({
                 "analysis_type": "scenario_aggregated_summary",
                 "status": "ok",
@@ -331,6 +344,7 @@ class HybridResearchQASkill:
             source_relation=source_relation,
             aggregated_summary=aggregated_summary,
             analysis_record_id=analysis_record_id,
+            answer_format=str(research_workflow.get("answer_format") or "query"),
         )
         if research_workflow["scenario_id"] in _STAGE4_SCENARIOS:
             citation_validation = self._validate_citations(answer, frame)
@@ -348,7 +362,15 @@ class HybridResearchQASkill:
                 }
             else:
                 synthesis["citation_validation"] = citation_validation
-        answer = self._sanitize_answer(answer, research_workflow["scenario_id"])
+        answer = self._sanitize_answer(
+            answer,
+            research_workflow["scenario_id"],
+            missing_dimensions=(
+                aggregated_summary.get("missing_dimension_labels")
+                if isinstance(aggregated_summary, dict)
+                else []
+            ),
+        )
         emit_progress(
             "hybrid_final_report",
             "completed",
@@ -381,6 +403,36 @@ class HybridResearchQASkill:
             status = "no_evidence"
         if analysis_result is not None:
             status = str(analysis_result.get("status") or status)
+
+        missing_dimensions = (
+            list(aggregated_summary.get("missing_dimensions") or [])
+            if isinstance(aggregated_summary, dict)
+            else []
+        )
+        record_research_execution(
+            user_id=ctx.user_id,
+            company_id=ctx.company_id,
+            scenario_id=research_workflow["scenario_id"],
+            workflow_id=research_workflow["workflow_id"],
+            strategy=strategy["strategy"],
+            status=status,
+            evidence_count=len(frame.records),
+            vector_hit_count=int(vector_result.get("hit_count") or 0),
+            synthesis_status=str(synthesis.get("status") or ""),
+            missing_dimensions=missing_dimensions,
+        )
+        logger.info(
+            "hybrid_research_qa scenario=%s workflow=%s strategy=%s status=%s "
+            "evidence=%s vector_hits=%s synthesis=%s missing_dimensions=%s",
+            research_workflow["scenario_id"],
+            research_workflow["workflow_id"],
+            strategy["strategy"],
+            status,
+            len(frame.records),
+            vector_result.get("hit_count", 0),
+            synthesis.get("status"),
+            ",".join(str(item) for item in missing_dimensions),
+        )
 
         return {
             "status": status,
@@ -419,8 +471,9 @@ class HybridResearchQASkill:
             "evidence": self._public_evidence(frame),
             "warnings": list(
                 dict.fromkeys(
-                    str(item)
+                    self._business_warning(item)
                     for item in [*warnings, research_workflow["boundary"]]
+                    if self._business_warning(item)
                 )
             ),
         }
@@ -545,7 +598,7 @@ class HybridResearchQASkill:
                     if any(marker in message for marker in ("性能", "指标", "物性"))
                     else "combined"
                 ),
-                "top_n": int(args.get("top_n") or 5),
+                "top_n": int(args.get("top_n") or 10),
                 "keyword": str(args.get("keyword") or ""),
             }
             return {
@@ -991,7 +1044,11 @@ class HybridResearchQASkill:
         }
 
     @staticmethod
-    def _sanitize_answer(answer: str, scenario_id: int) -> str:
+    def _sanitize_answer(
+        answer: str,
+        scenario_id: int,
+        missing_dimensions: list[str] | tuple[str, ...] | None = None,
+    ) -> str:
         """Remove internal process details from user-visible answers.
 
         Internal record ids, table names, execution-plan prefixes and SQL
@@ -999,7 +1056,8 @@ class HybridResearchQASkill:
         appended when the model omitted them.
         """
         text = str(answer or "")
-        text = _INTERNAL_RECORD_REF.sub("", text)
+        text = _INTERNAL_RECORD_REF.sub("（见证据依据）", text)
+        text = _EVIDENCE_RECORD_ID.sub("相关证据", text)
         for table in _INTERNAL_TABLE_NAMES:
             text = re.sub(rf"\b{re.escape(table)}\b", "业务数据表", text)
         text = re.sub(
@@ -1016,7 +1074,29 @@ class HybridResearchQASkill:
         text = re.sub(r"\[\s*\]", "", text)
         text = re.sub(r"[ \t]+\n", "\n", text)
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        text = re.sub(
+            r"(?ms)^\s*#{1,6}\s*证据依据\s*$.*?(?=^\s*#{1,6}\s+|\Z)",
+            "",
+            text,
+        )
+        text = re.sub(
+            r"(?ms)^\s*\*\*证据依据\*\*\s*$.*?(?=\n\s*\n|\Z)",
+            "",
+            text,
+        )
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
+        missing_labels = [
+            str(item).strip()
+            for item in (missing_dimensions or [])
+            if str(item).strip()
+        ]
+        if missing_labels and not any(label in text for label in missing_labels):
+            text = (
+                f"数据提示：当前缺少{'、'.join(missing_labels)}，"
+                "以下结论仅基于已有证据。\n\n"
+                f"{text}"
+            ).strip()
         if scenario_id in {8, 9, 10, 11} and "因果" not in text:
             text += (
                 "\n\n> 注：以上为基于历史数据的相关性分析，"
@@ -1152,19 +1232,36 @@ class HybridResearchQASkill:
         return default_query
 
     @staticmethod
+    def _business_warning(value: Any) -> str:
+        text = str(value or "").strip()
+        replacements = (
+            ("未解析动态字段", "部分字段未完全登记，可能存在数据遗漏"),
+            ("动态字段", "扩展字段"),
+            ("向量库", "知识库"),
+            ("向量证据", "知识片段"),
+            ("向量片段", "知识片段"),
+            ("companyId", "授权范围"),
+            ("API", "服务"),
+            ("workflow", "处理流程"),
+            ("EvidenceFrame", "证据链"),
+        )
+        for source, target in replacements:
+            text = text.replace(source, target)
+        return text
+
+    @staticmethod
     def _scenario_boundary_warnings(
         scenario_id: int,
         mysql_result: dict[str, Any],
     ) -> list[str]:
         if scenario_id == 7:
             return [
-                "当前结构化库没有通用“失败”标签；MySQL 仅提供授权样品上下文，"
-                "失败结论必须由显式字段或文档证据支撑。"
+                "当前数据没有统一的“失败”标签，系统仅依据明确失败状态或历史资料"
+                "判断，不能把普通历史实验直接视为失败。"
             ]
         if scenario_id in {12, 13}:
             return [
-                "现象/竞品与结构化样品之间没有专用实体映射；向量证据只作主题证据，"
-                "不得直接视为某条 MySQL 记录。"
+                "现象或竞品信息目前只能做主题匹配，不能直接认定对应某个样品或实验。"
             ]
         if scenario_id == 15:
             return [
@@ -1193,6 +1290,7 @@ class HybridResearchQASkill:
         source_relation: dict[str, Any],
         aggregated_summary: dict[str, Any] | None = None,
         analysis_record_id: str | None = None,
+        answer_format: str = "query",
     ) -> tuple[str, dict[str, Any]]:
         emit_progress(
             "llm_synthesis",
@@ -1200,32 +1298,49 @@ class HybridResearchQASkill:
             "生成混合研究综合报告",
             "正在基于场景化结构化摘要生成最终报告。",
         )
-        system = """你是材数智能体的混合研究问答器。
+        format_instruction = {
+            "query": (
+                "查询类回答：先给1-2句直接结论和可执行推荐；不要重复罗列卡片中的"
+                "全部数据；最后给出必要的风险或提示。"
+            ),
+            "analysis": (
+                "分析类回答：先给明确结论，再引用支撑结论的关键数据、计算范围"
+                "和证据引用；明确区分相关性与因果关系；最后给出风险或缺口。"
+            ),
+            "plan": (
+                "方案类回答：先给目标判断，再给出按优先级排列的行动方案、所需"
+                "数据或验证步骤；不得把候选方案写成已验证事实；最后给出限制条件。"
+            ),
+        }.get(answer_format, "回答应简洁、证据可追溯，并明确说明数据缺口。")
+        system = f"""你是材数智能体的混合研究问答器。
 输入的 STRUCTURED EVIDENCE SUMMARY 已由后端完成来源归一、权限过滤、基础实体对齐和场景化聚合。
 
 要求：
 1. 不要先分别写“数据库答案”和“RAG答案”，必须围绕用户问题给综合结论。
-2. 查询类场景（相似检索、性能反查、原料效果等）正文只写1-2句总结和推荐，不要重复罗列数据，完整数据由系统卡片展示。
-3. 分析类场景（关键变量、冲突、批次、窗口、阶段报告）结论必须引用 citation_anchors 中的 record_id。
+2. {format_instruction}
+3. 仅当 answer_format=analysis 时，结论必须引用 citation_anchors 中的 record_id。
 4. 结构化摘要与向量证据分型不得混淆；对话输入只能作为本轮约束，不能当作实验事实。
 5. 冲突必须保留差异和来源，不得静默选择一方。
 6. 证据不足时明确写缺口；不得编造实验、性能、原料或历史结论。
 7. 相关性不得写成因果。
-8. 最终回答只包含两段：结论（含关键数据、推荐、必要推理）和风险/缺口。不要单独写"证据依据"段，也不要重复罗列系统卡片已展示的数据。
+8. 不要单独写“证据依据”段，也不要重复罗列系统卡片已展示的数据；正文统一为“结论/方案 + 风险或缺口”。
 9. source_relation.level 不是 ENTITY_LINKED 时，不得把向量文档写成同一样品、实验或配方的结构化事实。
 10. structured_summary 中的数值必须原样引用，不得修改、四舍五入或估算。
 11. structured_summary 中的数值是原始字段单位，未做物理换算。
-12. 如果 structured_summary 含 degrade_level 或 missing_fields，结论开头必须明确说明缺了什么维度（例如"暂无工艺参数记录，以下按原料组成匹配"），不得答非所问。
+12. 如果 structured_summary 含 missing_dimension_labels，结论开头必须明确说明缺了什么业务维度，并把结论限定在已有证据范围内。
 回答中文，结构简洁。
 """
         summary = aggregated_summary if isinstance(aggregated_summary, dict) else {}
         degrade_level = summary.get("degrade_level")
         missing_fields = summary.get("missing_fields") or []
+        missing_dimension_labels = summary.get("missing_dimension_labels") or []
         context = {
             "schema_version": 2,
+            "answer_format": answer_format,
             "structured_summary": summary,
             "degrade_level": degrade_level,
             "missing_fields": missing_fields,
+            "missing_dimension_labels": missing_dimension_labels,
             "source_relation": source_relation,
             "source_summary": frame.source_summary,
             "conflict_count": len(frame.conflicts),

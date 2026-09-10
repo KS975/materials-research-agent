@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  documentEvidenceRecords,
   evidenceMetricRows,
   isHybridEvidencePayload,
   normalizedEvidenceRecords,
+  structuredEvidenceGroups,
 } from "../src/evidenceFrame.js";
 
 test("hybrid evidence helpers expose source counts and bounded records",()=>{
@@ -23,7 +25,11 @@ test("hybrid evidence helpers expose source counts and bounded records",()=>{
 
   assert.equal(isHybridEvidencePayload({frame}),true);
   assert.deepEqual(evidenceMetricRows(frame).map(x=>x.value),[5,2,1,1,1]);
-  assert.equal(normalizedEvidenceRecords({frame}).length,30);
+  const records=normalizedEvidenceRecords({frame});
+  assert.equal(records.length,35);
+  assert.equal(structuredEvidenceGroups(records).length,1);
+  assert.equal(structuredEvidenceGroups(records)[0].rows.length,35);
+  assert.equal(documentEvidenceRecords(records).length,0);
   assert.equal(isHybridEvidencePayload({evidence:[{}],intent:"other"}),false);
   assert.equal(isHybridEvidencePayload({evidence:[{}],intent:"hybrid_research_qa"}),true);
 });

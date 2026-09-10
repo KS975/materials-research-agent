@@ -7,7 +7,11 @@ from agent.research_scenarios import (
     RESEARCH_WORKFLOWS,
     resolve_research_scenario,
 )
-from agent.scenario_aggregator import aggregate_scenario_result, build_data_cards
+from agent.scenario_aggregator import (
+    aggregate_scenario_result,
+    build_data_cards,
+    build_dimension_status,
+)
 from schemas.user_context import UserContext
 from skills.hybrid_research_qa import HybridResearchQASkill
 
@@ -335,6 +339,37 @@ def test_build_data_cards_from_similarity_summary() -> None:
     assert card["items"][0]["sample_name"] == "EXP-097"
     assert card["items"][0]["recommendation"] == "首选复用"
     assert card["items"][0]["formula"][0]["name"] == "水"
+
+
+def test_research_workflow_declares_dimensions_and_answer_format() -> None:
+    process = resolve_research_scenario("找与 EXP-128 工艺最像的样品，并结合历史资料")
+    assert "process" in process["needed_dimensions"]
+    assert process["answer_format"] == "query"
+
+    analysis = resolve_research_scenario("分析冲击强度和 MFR 为什么冲突")
+    assert analysis["answer_format"] == "analysis"
+
+    plan = resolve_research_scenario("生成 EXP-128 的阶段总结")
+    assert plan["answer_format"] == "plan"
+
+
+def test_dimension_status_reports_missing_documents_without_inventing_data() -> None:
+    summary = {
+        "aggregated_type": "similarity_ranking",
+        "reference_sample": {
+            "formula": [{"name": "水", "value": 0.00125, "unit": "%"}]
+        },
+        "ranking": [],
+    }
+    status = build_dimension_status(
+        summary,
+        ["formula", "process", "documents"],
+        vector_result={"hit_count": 0},
+    )
+    assert status["available_dimensions"] == ["formula"]
+    assert status["missing_dimensions"] == ["process", "documents"]
+    assert "工艺参数" in status["missing_dimension_labels"]
+    assert "历史资料" in status["missing_dimension_labels"]
 
 
 def test_aggregator_produces_similarity_summary_with_ranking() -> None:

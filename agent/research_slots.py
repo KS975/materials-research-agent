@@ -8,9 +8,14 @@ _SUBSTITUTION_REVERSED = re.compile(
     r"用(?P<replacement>[^，。？?；;]{1,40}?)(?:替换|替代)"
     r"(?P<original>[^，。？?；;]{1,40})"
 )
-_SUBSTITUTION_DIRECT = re.compile(
-    r"(?P<original>[^，。？?；;]{1,40}?)(?:替代|替换成|替换为|替换)"
+_SUBSTITUTION_INTO = re.compile(
+    r"(?P<original>[^，。？?；;]{1,40}?)(?:替换成|替换为)"
     r"(?P<replacement>[^，。？?；;]{1,40}?)"
+    r"(?:的|历史|记录|配方|性能|，|。|？|$)"
+)
+_SUBSTITUTION_BY = re.compile(
+    r"(?P<replacement>[^，。？?；;]{1,40}?)(?:替代|替换)"
+    r"(?P<original>[^，。？?；;]{1,40}?)"
     r"(?:的|历史|记录|配方|性能|，|。|？|$)"
 )
 _EXPLICIT_IDENTIFIER = re.compile(
@@ -29,6 +34,10 @@ def normalize_research_slots(
         material = extract_material_name(message)
         if material:
             result["material_name"] = material
+    has_substitution = bool(
+        str(result.get("original_material") or "").strip()
+        and str(result.get("replacement_material") or "").strip()
+    )
     if not (
         str(result.get("original_material") or "").strip()
         and str(result.get("replacement_material") or "").strip()
@@ -36,6 +45,13 @@ def normalize_research_slots(
         substitution = extract_substitution_materials(message)
         if substitution is not None:
             result["original_material"], result["replacement_material"] = substitution
+            has_substitution = True
+    if (
+        str(result.get("original_material") or "").strip()
+        and str(result.get("replacement_material") or "").strip()
+    ):
+        for key in ("identifier", "left_identifier", "right_identifier"):
+            result.pop(key, None)
     if not str(result.get("competitor_name") or "").strip():
         competitor = extract_competitor_name(message)
         if competitor:
@@ -44,10 +60,14 @@ def normalize_research_slots(
         phenomenon = extract_phenomenon(message)
         if phenomenon:
             result["phenomenon"] = phenomenon
-    if not str(result.get("identifier") or "").strip():
+    if not has_substitution and not str(result.get("identifier") or "").strip():
         identifier = extract_identifier(message)
         if identifier:
             result["identifier"] = identifier
+    material_name = str(result.get("material_name") or "").strip()
+    identifier = str(result.get("identifier") or "").strip()
+    if material_name and identifier and identifier.casefold() in material_name.casefold():
+        result.pop("identifier", None)
     if not isinstance(result.get("filters"), list) or not result["filters"]:
         parsed_filters = parse_target_filters(message)
         if parsed_filters:
@@ -96,10 +116,16 @@ def extract_substitution_materials(message: str) -> tuple[str, str] | None:
         replacement = _clean_material(reversed_match.group("replacement"))
         if original and replacement:
             return original, replacement
-    direct_match = _SUBSTITUTION_DIRECT.search(text)
-    if direct_match:
-        original = _clean_material(direct_match.group("original"))
-        replacement = _clean_material(direct_match.group("replacement"))
+    into_match = _SUBSTITUTION_INTO.search(text)
+    if into_match:
+        original = _clean_material(into_match.group("original"))
+        replacement = _clean_material(into_match.group("replacement"))
+        if original and replacement:
+            return original, replacement
+    by_match = _SUBSTITUTION_BY.search(text)
+    if by_match:
+        original = _clean_material(by_match.group("original"))
+        replacement = _clean_material(by_match.group("replacement"))
         if original and replacement:
             return original, replacement
     return None

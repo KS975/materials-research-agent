@@ -124,7 +124,7 @@ def test_hybrid_research_degrades_vector_failure_to_structured_evidence():
     assert result["status"] == "ok"
     assert result["vector_result"]["status"] == "vector_unavailable"
     assert result["evidence_frame"]["source_summary"].get("vector_api", 0) == 0
-    assert any("向量证据源不可用" in item for item in result["warnings"])
+    assert any("知识资料源暂不可用" in item for item in result["warnings"])
 
 
 def test_hybrid_research_retries_with_smaller_context_before_degradation():
@@ -211,6 +211,25 @@ def test_sanitize_answer_adds_causal_caveat_for_analysis_scenarios():
     )
     cleaned = skill._sanitize_answer("关键变量是温度。", scenario_id=8)
     assert "不能据此直接判定因果" in cleaned
+
+
+def test_sanitize_answer_hides_plain_citation_ids_and_redundant_evidence_section():
+    skill = HybridResearchQASkill(
+        registry=FakeRegistry(),
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=lambda *args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    raw = (
+        "### 结论\n相关性成立。\n\n"
+        "### 证据依据\n"
+        "该结论由 mysql-fd4ad83404371c4fc836 和 vector-1234567890abcdef1234 支撑。"
+    )
+    cleaned = skill._sanitize_answer(raw, scenario_id=10)
+    assert "mysql-fd4ad83404371c4fc836" not in cleaned
+    assert "vector-1234567890abcdef1234" not in cleaned
+    assert "证据依据" not in cleaned
+    assert "相关性成立" in cleaned
 
 
 def test_vector_query_extracts_keywords_instead_of_full_sentence():

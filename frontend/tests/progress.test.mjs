@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createInitialAnalysisStep,
+  mergeProgressPhases,
   mergeProgressStep,
 } from "../src/progress.js";
 
@@ -64,4 +65,18 @@ test("database explorer retry attempts remain separately auditable",()=>{
   const steps=mergeProgressStep(mergeProgressStep([],first),second);
   assert.equal(steps.length,2);
   assert.deepEqual(steps.map(item=>item.attempt),[1,2]);
+});
+
+test("internal research steps collapse into user-readable phases",()=>{
+  const phases=mergeProgressPhases([
+    {stage:"stream_transport",status:"completed",elapsed_ms:100},
+    {stage:"hybrid_research_plan",status:"completed",elapsed_ms:200},
+    {stage:"mysql_evidence_recall",status:"completed",elapsed_ms:400},
+    {stage:"vector_evidence_recall",status:"completed",elapsed_ms:300},
+    {stage:"evidence_alignment",status:"completed",elapsed_ms:100},
+    {stage:"llm_synthesis",status:"running",elapsed_ms:1000},
+  ]);
+  assert.deepEqual(phases.map(item=>item.phase_id),["understand","retrieve","synthesize"]);
+  assert.equal(phases[1].source_count,3);
+  assert.equal(phases[2].status,"running");
 });

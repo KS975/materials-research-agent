@@ -25,6 +25,7 @@ from schemas.chat_ui import (
 )
 from schemas.user_context import UserContext
 from runtime.progress import emit_progress, progress_context
+from runtime.research_execution_audit import list_research_executions
 from runtime.chat_ui_workflow import (
     ChatUIWorkflowCheckpointError,
     ChatUIWorkflowConflictError,
@@ -2547,6 +2548,20 @@ _chat_ui_graph = build_chat_ui_graph(
         "engine_workflow": _execute_semantic_engine_workflow,
     },
 )
+
+
+@router.get("/research-execution-log")
+def get_research_execution_log(
+    limit: int = Query(default=50, ge=1, le=200),
+    ctx: UserContext = Depends(resolve_user_context),
+) -> dict[str, Any]:
+    return {
+        "items": list_research_executions(
+            user_id=ctx.user_id,
+            company_id=ctx.company_id,
+            limit=limit,
+        )
+    }
 
 
 @router.post("/chat-ui", response_model=ChatUIResponse)
