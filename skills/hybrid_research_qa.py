@@ -33,6 +33,19 @@ _INTERFACE_RESERVED_SCENARIOS = {19}
 _EVIDENCE_RECORD_ID = re.compile(
     r"\b(?:mysql|vector|upload|dialog|derived)-[a-f0-9]{20}\b"
 )
+_INTERNAL_RECORD_REF = re.compile(
+    r"\[\s*(?:mysql|vector|upload|dialog|derived|evf)-[a-f0-9]{8,}[^\]]*\]"
+)
+_INTERNAL_TABLE_NAMES = (
+    "eln_sample",
+    "sample_materials",
+    "data_column",
+    "mat_project",
+    "eln_synthesis_exp",
+    "eln_verify_item",
+    "eln_verify_exp",
+    "archive_data",
+)
 
 
 
@@ -303,6 +316,7 @@ class HybridResearchQASkill:
                 }
             else:
                 synthesis["citation_validation"] = citation_validation
+        answer = self._sanitize_answer(answer, research_workflow["scenario_id"])
         emit_progress(
             "hybrid_final_report",
             "completed",
@@ -936,6 +950,42 @@ class HybridResearchQASkill:
             "invalid_ids": invalid_found,
             "policy": "阶段四结论必须至少引用一个真实 EvidenceFrame record_id。",
         }
+
+    @staticmethod
+    def _sanitize_answer(answer: str, scenario_id: int) -> str:
+        """Remove internal process details from user-visible answers.
+
+        Internal record ids, table names, execution-plan prefixes and SQL
+        fragments never belong in the answer body. Scenario guardrails are
+        appended when the model omitted them.
+        """
+        text = str(answer or "")
+        text = _INTERNAL_RECORD_REF.sub("", text)
+        for table in _INTERNAL_TABLE_NAMES:
+            text = re.sub(rf"\b{re.escape(table)}\b", "业务数据表", text)
+        text = re.sub(
+            r"^(?:我需要|我将|我先|我打算|接下来我)[^。\n]*[。\n]+",
+            "",
+            text,
+        )
+        text = re.sub(
+            r"SELECT\s+[^\n;]*?\s+FROM\s+[^\n;]+;?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\[\s*\]", "", text)
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+        if scenario_id in {8, 9, 10, 11} and "因果" not in text:
+            text += (
+                "\n\n> 注：以上为基于历史数据的相关性分析，"
+                "不能据此直接判定因果关系。"
+            )
+        if scenario_id in {1, 2, 3, 4, 5, 6} and "单位" not in text:
+            text += "\n\n> 注：配方和工艺数值为原始字段单位，未做物理换算。"
+        return text
 
     @staticmethod
     def _analysis_fallback_report(

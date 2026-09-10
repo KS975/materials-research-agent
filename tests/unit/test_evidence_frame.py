@@ -116,3 +116,54 @@ def test_evidence_frame_handles_comparison_diff_sections():
     frame = builder.build()
     attributes = {record.attribute for record in frame.records}
     assert "service_performance.设备寿命" in attributes
+
+
+def test_sample_fields_are_not_attributed_to_project_entity():
+    builder = EvidenceFrameBuilder(_ctx())
+    builder.add_mysql_result(
+        {
+            "status": "ok",
+            "samples": [
+                {
+                    "sample": {
+                        "id": 128,
+                        "name": "EXP-128",
+                        "project_id": 115,
+                        "sample_type": None,
+                    },
+                    "formula": [
+                        {"name": "PC", "value": 65, "unit": "%", "resolved": True}
+                    ],
+                    "performance": [],
+                },
+                {
+                    "sample": {
+                        "id": 129,
+                        "name": "EXP-129",
+                        "project_id": 115,
+                        "sample_type": None,
+                    },
+                    "formula": [
+                        {"name": "ABS", "value": 35, "unit": "%", "resolved": True}
+                    ],
+                    "performance": [],
+                },
+            ],
+        }
+    )
+
+    frame = builder.build()
+    subjects = {record.subject_id for record in frame.records}
+
+    assert not any(subject.startswith("project_id:") for subject in subjects)
+    assert "sample:128" in subjects
+    assert "sample:129" in subjects
+    assert frame.conflicts == []
+
+    name_records = {
+        record.subject_id: record.value
+        for record in frame.records
+        if record.attribute == "name"
+    }
+    assert name_records["sample:128"] == "EXP-128"
+    assert name_records["sample:129"] == "EXP-129"

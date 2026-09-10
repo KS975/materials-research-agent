@@ -183,6 +183,36 @@ def test_hybrid_research_deterministic_fallback_keeps_structured_gap():
     assert any("LLM 综合失败" in item for item in result["warnings"])
 
 
+def test_sanitize_answer_strips_internal_references_and_adds_guardrails():
+    skill = HybridResearchQASkill(
+        registry=FakeRegistry(),
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=lambda *args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    raw = (
+        "我将先查数据库。结论：EXP-128 密度差为 183 "
+        "[mysql-fd4ad83404371c4fc836]，来源 eln_sample 表。"
+    )
+    cleaned = skill._sanitize_answer(raw, scenario_id=1)
+    assert "mysql-fd4ad83404371c4fc836" not in cleaned
+    assert "eln_sample" not in cleaned
+    assert "我将先查数据库" not in cleaned
+    assert "EXP-128 密度差为 183" in cleaned
+    assert "单位" in cleaned
+
+
+def test_sanitize_answer_adds_causal_caveat_for_analysis_scenarios():
+    skill = HybridResearchQASkill(
+        registry=FakeRegistry(),
+        llm=FakeLLM(),
+        material_intelligence=SimpleNamespace(execute_intent=lambda *args: {}),
+        attachment_store=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+    cleaned = skill._sanitize_answer("关键变量是温度。", scenario_id=8)
+    assert "不能据此直接判定因果" in cleaned
+
+
 def test_hybrid_research_reuses_structured_similarity_workflow():
     calls = []
 

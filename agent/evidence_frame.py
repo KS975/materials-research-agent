@@ -24,7 +24,6 @@ from agent.scenario_aggregator import serialize_aggregated_summary
 _ENTITY_ID_KEYS = (
     "sample_id",
     "experiment_id",
-    "project_id",
     "material_id",
     "record_id",
     "id",
@@ -413,7 +412,20 @@ class EvidenceFrameBuilder:
                             value=value,
                             source_uri="mysql://authorized_material_query",
                         )
-                self._walk_entity(sample)
+                # Add the sample's own scalar fields under the sample subject.
+                # project_id is a foreign key reference, not the entity id, so it
+                # must never become the subject of the sample's own fields.
+                for field, value in sample.items():
+                    if field == "id" or isinstance(value, (Mapping, list)):
+                        continue
+                    self._add_record(
+                        subject_id=subject,
+                        entity_type="sample",
+                        attribute=field,
+                        value=value,
+                        source_uri="mysql://eln_sample",
+                        observed_at=self._observed_at(sample),
+                    )
             else:
                 self._walk_entity(payload)
 

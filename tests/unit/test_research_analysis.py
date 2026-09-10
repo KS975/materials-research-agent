@@ -148,7 +148,9 @@ def test_key_variable_hybrid_result_adds_derived_evidence_and_chart_data():
     assert result["evidence_frame"]["source_summary"]["derived"] == 2
     assert result["synthesis"]["mode"] == "deterministic_analysis_report"
     assert result["synthesis"]["citation_validation"]["valid_count"] >= 1
-    assert "derived-" in result["answer"]
+    # Citations are validated server-side but stripped from the user-visible answer.
+    assert "derived-" not in result["answer"]
+    assert "mysql-" not in result["answer"]
 
 
 def test_conflict_batch_window_and_stage_report_analysis():
