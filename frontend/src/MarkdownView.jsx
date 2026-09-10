@@ -1,4 +1,5 @@
 import {useState} from "react";
+import {classifyLine, isTableSeparator, splitBlocks} from "./markdownBlocks";
 
 const INLINE_PATTERN = /(`[^`]+`)|(\[[^\]]+\]\([^)\s]+\))|(\*\*[^*]+\*\*)|(\*[^*]+\*)/g;
 
@@ -40,10 +41,6 @@ function Heading({level, children}) {
   return <Tag>{children}</Tag>;
 }
 
-function isTableSeparator(line) {
-  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(line);
-}
-
 function tableCells(line) {
   return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|")
     .map(cell => cell.trim());
@@ -57,7 +54,10 @@ function MarkdownBlock({block, index}) {
 
   if (first.startsWith("```")) {
     const language = first.slice(3).trim();
-    const code = lines.slice(1, first.endsWith("```") ? -1 : undefined).join("\n");
+    const lastTrim = lines.length > 1 ? lines[lines.length - 1].trim() : "";
+    const hasClosingFence = lines.length > 1 && lastTrim.startsWith("```");
+    const end = hasClosingFence ? lines.length - 1 : lines.length;
+    const code = lines.slice(1, end).join("\n");
     return (
       <div className="mdCodeBlock">
         <div><span>{language || "code"}</span></div>
@@ -93,7 +93,18 @@ function MarkdownBlock({block, index}) {
 
   const heading = first.match(/^(#{1,6})\s+(.*)$/);
   if (heading) {
-    return <Heading level={heading[1].length}>{renderInline(heading[2], `h-${index}`)}</Heading>;
+    const rest = lines.slice(1).filter(line => line.trim());
+    if (!rest.length) {
+      return <Heading level={heading[1].length}>{renderInline(heading[2], `h-${index}`)}</Heading>;
+    }
+    return (
+      <>
+        <Heading level={heading[1].length}>{renderInline(heading[2], `h-${index}`)}</Heading>
+        {rest.map((line, itemIndex) => (
+          <p key={`h-rest-${index}-${itemIndex}`}>{renderInline(line, `h-rest-${index}-${itemIndex}`)}</p>
+        ))}
+      </>
+    );
   }
 
   if (lines.every(line => /^\s*[-*+]\s+/.test(line))) {
@@ -132,26 +143,20 @@ function MarkdownBlock({block, index}) {
     );
   }
 
-  return <p>{renderInline(lines.join("\n"), `p-${index}`)}</p>;
+  if (lines.length === 1) {
+    return <p>{renderInline(lines[0], `p-${index}`)}</p>;
+  }
+  return (
+    <>
+      {lines.map((line, itemIndex) => (
+        <p key={`p-${index}-${itemIndex}`}>{renderInline(line, `p-${index}-${itemIndex}`)}</p>
+      ))}
+    </>
+  );
 }
 
 export default function MarkdownView({content}) {
-  const text = String(content ?? "");
-  const blocks = [];
-  let current = [];
-  let inCode = false;
-
-  for (const line of text.split("\n")) {
-    if (line.trim().startsWith("```")) inCode = !inCode;
-    if (!inCode && !line.trim()) {
-      if (current.length) blocks.push(current.join("\n"));
-      current = [];
-    } else {
-      current.push(line);
-    }
-  }
-  if (current.length) blocks.push(current.join("\n"));
-
+  const blocks = splitBlocks(String(content ?? ""));
   return (
     <div className="markdownView">
       {blocks.map((block, index) => <MarkdownBlock key={index} block={block} index={index}/>)}
