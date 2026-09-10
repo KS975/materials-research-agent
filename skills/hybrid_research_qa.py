@@ -13,7 +13,11 @@ from agent.research_analysis import (
     research_analysis_chart_data,
     run_research_analysis,
 )
-from agent.scenario_aggregator import aggregate_scenario_result, serialize_aggregated_summary
+from agent.scenario_aggregator import (
+    aggregate_scenario_result,
+    build_data_cards,
+    serialize_aggregated_summary,
+)
 from agent.research_scenarios import resolve_research_scenario
 from agent.research_slots import normalize_research_slots, parse_target_filters
 from llm.base import LLMProvider
@@ -378,6 +382,10 @@ class HybridResearchQASkill:
             "vector_result": vector_result,
             "analysis_result": analysis_result,
             "chart_data": research_analysis_chart_data(analysis_result or {}),
+            "data_cards": build_data_cards(
+                aggregated_summary,
+                research_workflow["scenario_id"],
+            ),
             "evidence_frame": frame.model_dump(mode="json"),
             "source_relation": source_relation,
             "vector_fact_extraction": {

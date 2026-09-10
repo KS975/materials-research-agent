@@ -276,3 +276,217 @@ def serialize_aggregated_summary(summary: Mapping[str, Any]) -> str:
     return json.dumps(
         summary, ensure_ascii=False, sort_keys=True, default=str
     )
+
+
+def build_data_cards(
+    summary: Mapping[str, Any] | None,
+    scenario_id: int,
+) -> list[dict[str, Any]]:
+    """Derive front-end data cards from the aggregated summary.
+
+    Cards reuse the same deterministic summary that feeds the LLM so the
+    narrative and the visible data never diverge.
+    """
+    if not isinstance(summary, Mapping):
+        return []
+    aggregated = str(summary.get("aggregated_type") or "")
+    if aggregated == "similarity_ranking":
+        return [_similarity_card(summary)]
+    if aggregated == "performance_filter":
+        return [_filter_card(summary)]
+    if aggregated in {"material_usage", "material_substitution"}:
+        return [_material_card(summary)]
+    if aggregated == "sample_profile":
+        return [_profile_card(summary)]
+    if aggregated == "analysis":
+        return [_analysis_card(summary)]
+    if aggregated == "cross_project_assets":
+        return [_cross_project_card(summary)]
+    if aggregated == "spectrum_features":
+        return [_spectrum_card(summary)]
+    if aggregated == "result_association":
+        return [_association_card(summary)]
+    if aggregated in {"failure_case", "anomaly", "benchmark", "cold_start"}:
+        return [_candidate_card(aggregated, summary)]
+    return []
+
+
+def _card_item(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "sample_id": row.get("sample_id"),
+        "sample_name": row.get("name") or row.get("sample_name"),
+        "similarity": row.get("similarity"),
+        "formula": row.get("formula") or [],
+        "process": row.get("process") or [],
+        "performance": row.get("performance") or [],
+        "status": row.get("status"),
+        "recommendation": _recommendation(row),
+    }
+
+
+def _recommendation(row: Mapping[str, Any]) -> str:
+    raw = row.get("similarity")
+    try:
+        score = float(raw)
+    except (TypeError, ValueError):
+        return "可参考"
+    if score >= 90:
+        return "首选复用"
+    if score >= 80:
+        return "可参考"
+    return "谨慎参考"
+
+
+def _similarity_card(summary: Mapping[str, Any]) -> dict[str, Any]:
+    items = [_card_item(row) for row in (summary.get("ranking") or [])[:5]]
+    return {
+        "card_type": "sample_list",
+        "title": f"相似配方 Top{len(items)}",
+        "reference": summary.get("reference_sample") or {},
+        "items": items,
+        "degrade_level": summary.get("degrade_level"),
+        "missing_fields": summary.get("missing_fields") or [],
+        "warnings": summary.get("warnings") or [],
+    }
+
+
+def _filter_card(summary: Mapping[str, Any]) -> dict[str, Any]:
+    items = [_card_item(row) for row in (summary.get("top_candidates") or [])[:5]]
+    return {
+        "card_type": "sample_list",
+        "title": f"满足条件样品 Top{len(items)}",
+        "filters": summary.get("filters") or [],
+        "matched_count": summary.get("matched_count"),
+        "items": items,
+        "warnings": summary.get("warnings") or [],
+    }
+
+
+def _material_card(summary: Mapping[str, Any]) -> dict[str, Any]:
+    items = [_card_item(row) for row in (summary.get("top_candidates") or [])[:5]]
+    return {
+        "card_type": "sample_list",
+        "title": "原料相关样品",
+        "material_name": summary.get("material_name"),
+        "original_material": summary.get("original_material"),
+        "replacement_material": summary.get("replacement_material"),
+        "matched_count": summary.get("matched_count"),
+        "truncated": summary.get("truncated"),
+        "items": items,
+        "warnings": summary.get("warnings") or [],
+    }
+
+
+def _profile_card(summary: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "card_type": "sample_detail",
+        "title": f"样品画像 {(summary.get('sample') or {}).get('name') or ''}".strip(),
+        "sample": summary.get("sample") or {},
+        "formula": summary.get("formula") or [],
+        "process": summary.get("process") or [],
+        "performance": summary.get("performance") or [],
+        "service_performance": summary.get("service_performance") or [],
+        "synthesis_count": summary.get("synthesis_count"),
+        "verify_count": summary.get("verify_count"),
+        "warnings": summary.get("warnings") or [],
+    }
+
+
+def _analysis_card(summary: Mapping[str, Any]) -> dict[str, Any]:
+    rows: list[list[Any]] = []
+    for item in (summary.get("variables") or [])[:10]:
+        if isinstance(item, Mapping):
+            rows.append([
+                item.get("field") or item.get("name"),
+                item.get("correlation") or item.get("value"),
+                item.get("sample_count"),
+            ])
+    for item in (summary.get("conflicts") or [])[:10]:
+        if isinstance(item, Mapping):
+            rows.append([
+                item.get("field") or item.get("name"),
+                item.get("direction") or item.get("correlation"),
+                item.get("sample_count"),
+            ])
+    return {
+        "card_type": "metric_table",
+        "title": "确定性分析结果",
+        "columns": ["字段", "指标", "样本数"],
+        "rows": rows,
+        "sample_count": summary.get("sample_count"),
+        "warnings": summary.get("warnings") or [],
+    }
+
+
+def _cross_project_card(summary: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "card_type": "metric_table",
+        "title": "跨项目可复用资产",
+        "columns": ["项目", "样品数", "资产", "权限"],
+        "rows": [
+            [
+                project.get("project_id"),
+                project.get("sample_count"),
+                ", ".join(
+                    str(asset.get("asset_type"))
+                    for asset in (project.get("assets") or [])
+                    if isinstance(asset, Mapping)
+                ),
+                "只读",
+            ]
+            for project in (summary.get("projects") or [])
+            if isinstance(project, Mapping)
+        ],
+        "warnings": summary.get("warnings") or [],
+    }
+
+
+def _spectrum_card(summary: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "card_type": "metric_table",
+        "title": "图谱/曲线结构化特征",
+        "columns": ["样品", "特征字段", "值"],
+        "rows": [
+            [item.get("sample_id"), item.get("field"), item.get("value")]
+            for item in (summary.get("features") or [])
+            if isinstance(item, Mapping)
+        ],
+        "warnings": summary.get("warnings") or [],
+    }
+
+
+def _association_card(summary: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "card_type": "metric_table",
+        "title": "检测结果关联建议",
+        "columns": ["输入编号", "匹配状态", "匹配样品", "确认"],
+        "rows": [
+            [
+                item.get("identifier"),
+                item.get("match_status"),
+                ((item.get("matched_sample") or {}) if isinstance(item, Mapping) else {}).get("name")
+                or "-",
+                "待确认" if item.get("confirmation_required") else "-",
+            ]
+            for item in (summary.get("matches") or [])
+            if isinstance(item, Mapping)
+        ],
+        "warnings": summary.get("warnings") or [],
+    }
+
+
+def _candidate_card(kind: str, summary: Mapping[str, Any]) -> dict[str, Any]:
+    rows = summary.get("top_candidates") or summary.get("reference_candidates") or []
+    items = [_card_item(row) for row in rows[:5] if isinstance(row, Mapping)]
+    titles = {
+        "failure_case": "失败/异常案例候选",
+        "anomaly": "异常与失效案例候选",
+        "benchmark": "竞品对标候选",
+        "cold_start": "冷启动参考候选",
+    }
+    return {
+        "card_type": "sample_list",
+        "title": titles.get(kind, "候选样品"),
+        "items": items,
+        "warnings": summary.get("warnings") or [],
+    }

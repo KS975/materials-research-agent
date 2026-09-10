@@ -7,7 +7,7 @@ from agent.research_scenarios import (
     RESEARCH_WORKFLOWS,
     resolve_research_scenario,
 )
-from agent.scenario_aggregator import aggregate_scenario_result
+from agent.scenario_aggregator import aggregate_scenario_result, build_data_cards
 from schemas.user_context import UserContext
 from skills.hybrid_research_qa import HybridResearchQASkill
 
@@ -311,6 +311,30 @@ def test_scenario20_cross_project_is_read_only() -> None:
     assert result["research_workflow"]["execution_status"] == "SUPPORTED_DISPLAY"
     assert result["research_workflow"]["write_policy"] == "NO_WRITE"
     assert result["mysql_result"]["analysis_type"] == "cross_project_asset_query"
+
+
+def test_build_data_cards_from_similarity_summary() -> None:
+    summary = {
+        "aggregated_type": "similarity_ranking",
+        "reference_sample": {"id": 932, "name": "EXP-128", "formula": [], "process": [], "performance": []},
+        "ranking": [
+            {
+                "sample_id": 933,
+                "name": "EXP-097",
+                "similarity": "92.00",
+                "formula": [{"name": "水", "value": 0.0012, "unit": "%"}],
+                "performance": [{"name": "密度差", "value": 112, "unit": None}],
+            }
+        ],
+        "warnings": [],
+    }
+    cards = build_data_cards(summary, 1)
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["card_type"] == "sample_list"
+    assert card["items"][0]["sample_name"] == "EXP-097"
+    assert card["items"][0]["recommendation"] == "首选复用"
+    assert card["items"][0]["formula"][0]["name"] == "水"
 
 
 def test_aggregator_produces_similarity_summary_with_ranking() -> None:
