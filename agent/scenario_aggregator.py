@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 
@@ -109,7 +110,10 @@ def _similarity_summary(scenario_id: int, result: Mapping[str, Any]) -> dict[str
         for section in ("formula", "process", "performance", "service_performance"):
             fields = sample.get(section) or item.get(section) or []
             if fields:
-                row[section] = _compact_fields(fields)
+                row[section] = _compact_fields(
+                    fields,
+                    decimals=3 if section in {"performance", "service_performance"} else 4,
+                )
         top.append(row)
     return {
         "aggregated_type": "similarity_ranking",
@@ -117,13 +121,16 @@ def _similarity_summary(scenario_id: int, result: Mapping[str, Any]) -> dict[str
             "id": reference.get("id") or reference.get("name"),
             "name": reference.get("name"),
             "formula": _compact_fields(
-                result.get("reference_formula") or result.get("formula")
+                result.get("reference_formula") or result.get("formula"),
+                decimals=4,
             ),
             "process": _compact_fields(
-                result.get("reference_process") or result.get("process")
+                result.get("reference_process") or result.get("process"),
+                decimals=4,
             ),
             "performance": _compact_fields(
-                result.get("reference_performance") or result.get("performance")
+                result.get("reference_performance") or result.get("performance"),
+                decimals=3,
             ),
         },
         "ranking": top,
@@ -170,9 +177,9 @@ def _filter_summary(result: Mapping[str, Any]) -> dict[str, Any]:
             "sample_id": sample.get("id") or sample.get("name"),
             "name": sample.get("name"),
             "project_id": sample.get("project_id"),
-            "formula": _compact_fields(item.get("formula")),
-            "performance": _compact_fields(item.get("performance")),
-            "process": _compact_fields(item.get("process")),
+            "formula": _compact_fields(item.get("formula"), decimals=4),
+            "performance": _compact_fields(item.get("performance"), decimals=3),
+            "process": _compact_fields(item.get("process"), decimals=4),
         })
     return {
         "aggregated_type": "performance_filter",
@@ -194,10 +201,10 @@ def _profile_summary(result: Mapping[str, Any]) -> dict[str, Any]:
             "sample_type": (result.get("sample") or {}).get("sample_type"),
             "describe": (result.get("sample") or {}).get("describe"),
         },
-        "formula": _compact_fields(result.get("formula")),
-        "process": _compact_fields(result.get("process")),
-        "performance": _compact_fields(result.get("performance")),
-        "service_performance": _compact_fields(result.get("service_performance")),
+        "formula": _compact_fields(result.get("formula"), decimals=4),
+        "process": _compact_fields(result.get("process"), decimals=4),
+        "performance": _compact_fields(result.get("performance"), decimals=3),
+        "service_performance": _compact_fields(result.get("service_performance"), decimals=3),
         "synthesis_count": len(result.get("synthesis_records") or []),
         "verify_count": len(result.get("verify_items") or []),
         "status": result.get("status"),
@@ -215,8 +222,11 @@ def _material_summary(scenario_id: int, result: Mapping[str, Any]) -> dict[str, 
         top.append({
             "sample_id": sample.get("id") or sample.get("name"),
             "name": sample.get("name"),
-            "formula": _compact_fields(item.get("formula") or item.get("matched_fields")),
-            "performance": _compact_fields(item.get("performance")),
+            "formula": _compact_fields(
+                item.get("formula") or item.get("matched_fields"),
+                decimals=4,
+            ),
+            "performance": _compact_fields(item.get("performance"), decimals=3),
             "interpretation": item.get("interpretation"),
         })
     return {
@@ -256,14 +266,27 @@ def _analysis_summary(scenario_id: int, result: Mapping[str, Any]) -> dict[str, 
     return {
         "aggregated_type": "analysis",
         "scenario_id": scenario_id,
-        "variables": result.get("variables") or result.get("key_variables"),
-        "conflicts": result.get("conflicts"),
-        "differences": result.get("differences"),
-        "windows": result.get("windows"),
+        "variables": _normalize_analysis_value(
+            result.get("variables") or result.get("key_variables")
+        ),
+        "conflicts": _normalize_analysis_value(result.get("conflicts")),
+        "differences": _normalize_analysis_value(result.get("differences")),
+        "windows": _normalize_analysis_value(result.get("windows")),
         "sample_count": (result.get("dataset") or {}).get("sample_count"),
         "status": result.get("status"),
         "warnings": _compact_warnings(result),
     }
+
+
+def _normalize_analysis_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _normalize_analysis_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalize_analysis_value(item) for item in value]
+    return _normalize_number(value, 3)
 
 
 def _result_association_summary(result: Mapping[str, Any]) -> dict[str, Any]:
@@ -384,13 +407,17 @@ def _is_nonempty(value: Any) -> bool:
     return True
 
 
-def _compact_fields(fields: Any) -> list[dict[str, Any]]:
+def _compact_fields(
+    fields: Any,
+    *,
+    decimals: int = 4,
+) -> list[dict[str, Any]]:
     if not isinstance(fields, list):
         return []
     return [
         {
             "name": f.get("name"),
-            "value": f.get("value"),
+            "value": _normalize_number(f.get("value"), decimals),
             "unit": f.get("unit"),
         }
         for f in fields[:15]
@@ -401,6 +428,23 @@ def _compact_fields(fields: Any) -> list[dict[str, Any]]:
             and str(f.get("value") or "").strip() != ""
         )
     ]
+
+
+def _normalize_number(value: Any, decimals: int) -> Any:
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, TypeError, ValueError):
+        return value
+    if not number.is_finite():
+        return value
+    if number == number.to_integral_value():
+        return int(number)
+    quantum = Decimal("1").scaleb(-max(0, int(decimals)))
+    return float(number.quantize(quantum))
 
 
 def _compact_candidates(items: Any) -> list[dict[str, Any]]:
@@ -414,8 +458,8 @@ def _compact_candidates(items: Any) -> list[dict[str, Any]]:
         top.append({
             "sample_id": sample.get("id") or sample.get("name"),
             "name": sample.get("name"),
-            "formula": _compact_fields(item.get("formula")),
-            "performance": _compact_fields(item.get("performance")),
+            "formula": _compact_fields(item.get("formula"), decimals=4),
+            "performance": _compact_fields(item.get("performance"), decimals=3),
         })
     return top
 

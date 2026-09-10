@@ -1325,7 +1325,7 @@ class HybridResearchQASkill:
 7. 相关性不得写成因果。
 8. 不要单独写“证据依据”段，也不要重复罗列系统卡片已展示的数据；正文统一为“结论/方案 + 风险或缺口”。
 9. source_relation.level 不是 ENTITY_LINKED 时，不得把向量文档写成同一样品、实验或配方的结构化事实。
-10. structured_summary 中的数值必须原样引用，不得修改、四舍五入或估算。
+10. structured_summary 中的数值已按业务精度归一化，必须原样引用，不得再次修改、舍入或估算。
 11. structured_summary 中的数值是原始字段单位，未做物理换算。
 12. 如果 structured_summary 含 missing_dimension_labels，结论开头必须明确说明缺了什么业务维度，并把结论限定在已有证据范围内。
 回答中文，结构简洁。

@@ -343,8 +343,12 @@ def test_build_data_cards_from_similarity_summary() -> None:
 
 def test_research_workflow_declares_dimensions_and_answer_format() -> None:
     process = resolve_research_scenario("找与 EXP-128 工艺最像的样品，并结合历史资料")
-    assert "process" in process["needed_dimensions"]
+    assert process["needed_dimensions"] == ["process", "documents"]
     assert process["answer_format"] == "query"
+
+    performance = resolve_research_scenario("找与 EXP-128 性能最像的样品，并结合历史资料")
+    assert performance["needed_dimensions"] == ["performance", "documents"]
+    assert performance["answer_format"] == "query"
 
     analysis = resolve_research_scenario("分析冲击强度和 MFR 为什么冲突")
     assert analysis["answer_format"] == "analysis"
@@ -399,6 +403,26 @@ def test_aggregator_produces_similarity_summary_with_ranking() -> None:
     assert summary["ranking"][0]["sample_id"] == 933
     assert summary["ranking"][0]["similarity"] == "92.00"
     assert summary["ranking"][0]["formula"][0]["value"] == 0.0012
+
+
+def test_aggregator_normalizes_business_precision_before_llm_and_cards() -> None:
+    mysql_result = {
+        "status": "ok",
+        "analysis_type": "similar_samples",
+        "reference_sample": {"id": 932, "name": "EXP-128"},
+        "reference_formula": [
+            {"name": "水", "value": "0.00123456", "unit": "%", "resolved": True},
+        ],
+        "reference_performance": [
+            {"name": "持液量", "value": "0.075451269", "unit": None, "resolved": True},
+            {"name": "密度差", "value": "183", "unit": None, "resolved": True},
+        ],
+        "ranking": [],
+    }
+    summary = aggregate_scenario_result(1, mysql_result)
+    assert summary["reference_sample"]["formula"][0]["value"] == 0.0012
+    assert summary["reference_sample"]["performance"][0]["value"] == 0.075
+    assert summary["reference_sample"]["performance"][1]["value"] == 183
 
 
 def test_aggregator_produces_material_summary_with_cleaned_name() -> None:

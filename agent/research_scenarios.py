@@ -225,6 +225,18 @@ def resolve_research_scenario(
 
 
 def _needed_dimensions(scenario_id: int, text: str) -> list[str]:
+    if scenario_id == 2:
+        dimensions = []
+        if "配方" in text or "原料" in text or "组分" in text:
+            dimensions.append("formula")
+        if "工艺" in text or "流程" in text or "条件" in text:
+            dimensions.append("process")
+        if "性能" in text or "指标" in text or "物性" in text:
+            dimensions.append("performance")
+        if not dimensions:
+            dimensions.extend(("formula", "process", "performance"))
+        dimensions.append("documents")
+        return _dedupe(dimensions)
     dimensions = list(_REQUIRED_DIMENSIONS_BY_SCENARIO.get(scenario_id, ()))
     if scenario_id in {1, 2, 4, 5, 6, 7, 12, 13, 14}:
         if "工艺" in text or "流程" in text or "条件" in text:
