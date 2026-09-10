@@ -371,6 +371,13 @@ aside{min-height:0;padding:22px 14px 16px}.brand{flex:0 0 auto;padding:0 8px 20p
 .dataCardTableWrap td{max-width:220px;padding:7px 8px;border-bottom:1px solid #f1f3f6;color:#475467;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dataCardEmpty{margin:8px 12px;color:#98a2b3;font-size:11.5px}
 .dataCardWarnings{display:grid;gap:5px;margin:0 12px 11px;padding:8px 9px;border-left:2px solid #e4bd62;background:#fffaf0;color:#7a5b13;font-size:11.5px;line-height:1.45}
+
+/* Evidence panel: collapsed by default, business-friendly summary */
+.evidencePanel>summary{padding:11px 12px;color:#667085;font-size:11.5px;cursor:pointer;list-style:none}
+.evidencePanel>summary::-webkit-details-marker{display:none}
+.evidencePanel>summary::before{content:"▸";display:inline-block;margin-right:7px;color:#98a2b3;transition:transform .15s ease}
+.evidencePanel[open]>summary::before{transform:rotate(90deg)}
+.evidencePanelBody{max-height:400px;overflow-y:auto;padding-top:0}
 .engineShadow .engineTableWrap table{min-width:360px}
 .engineChart{overflow:hidden;border:1px solid #e5e7eb;border-radius:7px;background:#fff}
 .engineChart>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;background:#f8fafc;color:#344054;font-size:12.5px;font-weight:620;cursor:pointer}
