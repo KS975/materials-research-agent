@@ -57,24 +57,22 @@ def _similarity_summary(scenario_id: int, result: Mapping[str, Any]) -> dict[str
         for section in ("formula", "process", "performance", "service_performance"):
             fields = sample.get(section) or item.get(section) or []
             if fields:
-                row[section] = [
-                    {
-                        "name": f.get("name"),
-                        "value": f.get("value"),
-                        "unit": f.get("unit"),
-                    }
-                    for f in fields[:8]
-                    if isinstance(f, Mapping)
-                ]
+                row[section] = _compact_fields(fields)
         top.append(row)
     return {
         "aggregated_type": "similarity_ranking",
         "reference_sample": {
             "id": reference.get("id") or reference.get("name"),
             "name": reference.get("name"),
-            "formula": _compact_fields(result.get("formula")),
-            "process": _compact_fields(result.get("process")),
-            "performance": _compact_fields(result.get("performance")),
+            "formula": _compact_fields(
+                result.get("reference_formula") or result.get("formula")
+            ),
+            "process": _compact_fields(
+                result.get("reference_process") or result.get("process")
+            ),
+            "performance": _compact_fields(
+                result.get("reference_performance") or result.get("performance")
+            ),
         },
         "ranking": top,
         "ranking_count": len(ranking),
@@ -240,7 +238,12 @@ def _compact_fields(fields: Any) -> list[dict[str, Any]]:
             "unit": f.get("unit"),
         }
         for f in fields[:15]
-        if isinstance(f, Mapping) and f.get("resolved", bool(f.get("name")))
+        if (
+            isinstance(f, Mapping)
+            and f.get("resolved", bool(f.get("name")))
+            and f.get("value") is not None
+            and str(f.get("value") or "").strip() != ""
+        )
     ]
 
 

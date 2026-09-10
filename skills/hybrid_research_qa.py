@@ -284,6 +284,8 @@ class HybridResearchQASkill:
             message=message,
             frame=frame,
             source_relation=source_relation,
+            aggregated_summary=aggregated_summary,
+            analysis_record_id=analysis_record_id,
         )
         if research_workflow["scenario_id"] in _STAGE4_SCENARIOS:
             citation_validation = self._validate_citations(answer, frame)
@@ -1082,45 +1084,56 @@ class HybridResearchQASkill:
         message: str,
         frame,
         source_relation: dict[str, Any],
+        aggregated_summary: dict[str, Any] | None = None,
+        analysis_record_id: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         emit_progress(
             "llm_synthesis",
             "running",
             "生成混合研究综合报告",
-            "正在基于压缩证据视图生成最终报告。",
+            "正在基于场景化结构化摘要生成最终报告。",
         )
         system = """你是材数智能体的混合研究问答器。
-输入的 COMPACT EVIDENCE CONTEXT 已由后端完成来源归一、权限过滤、基础实体对齐、冲突标记和有界压缩。
+输入的 STRUCTURED EVIDENCE SUMMARY 已由后端完成来源归一、权限过滤、基础实体对齐和场景化聚合。
 
 要求：
 1. 不要先分别写“数据库答案”和“RAG答案”，必须围绕用户问题给综合结论。
-2. 每个事实性结论后用 record_id 标注证据，例如 [evf-xxx/record-id]。
-3. MySQL、vector_api、upload、dialog 的证据分型不得混淆；对话输入只能作为本轮约束，不能当作实验事实。
-4. 冲突必须保留差异和来源，不得静默选择一方。
-5. 证据不足时明确写缺口；不得编造实验、性能、原料或历史结论。
-6. 相关性不得写成因果。
-7. 最终回答包含：结论、证据依据、风险/缺口。不要暴露内部表名、SQL、凭证或向量服务地址。
-8. selection.omitted_records 大于 0 时，不得推断被省略证据的内容。
+2. 查询类场景（相似检索、性能反查、原料效果等）正文只写1-2句总结和推荐，不要重复罗列数据，完整数据由系统卡片展示。
+3. 分析类场景（关键变量、冲突、批次、窗口、阶段报告）结论必须引用 citation_anchors 中的 record_id。
+4. 结构化摘要与向量证据分型不得混淆；对话输入只能作为本轮约束，不能当作实验事实。
+5. 冲突必须保留差异和来源，不得静默选择一方。
+6. 证据不足时明确写缺口；不得编造实验、性能、原料或历史结论。
+7. 相关性不得写成因果。
+8. 最终回答包含：结论、证据依据、风险/缺口。不要暴露内部表名、SQL、凭证或向量服务地址。
 9. source_relation.level 不是 ENTITY_LINKED 时，不得把向量文档写成同一样品、实验或配方的结构化事实。
+10. structured_summary 中的数值是原始字段单位，未做物理换算。
 回答中文，结构简洁。
 """
+        summary = aggregated_summary if isinstance(aggregated_summary, dict) else {}
+        context = {
+            "schema_version": 2,
+            "structured_summary": summary,
+            "source_relation": source_relation,
+            "source_summary": frame.source_summary,
+            "conflict_count": len(frame.conflicts),
+            "warnings": [str(item) for item in frame.warnings[:8]],
+            "citation_anchors": (
+                [{"record_id": analysis_record_id, "kind": "derived_analysis"}]
+                if analysis_record_id
+                else []
+            ),
+            "evidence_record_count": len(frame.records),
+        }
         attempts: list[dict[str, Any]] = []
         last_error_type = ""
         for aggressive in (False, True):
-            context, serialized = self.context_compressor.build(
-                frame=frame,
-                query=message,
-                aggressive=aggressive,
-            )
-            context["source_relation"] = source_relation
-            serialized = json.dumps(
+            serialized = self.context_compressor.bound_context(
                 context,
-                ensure_ascii=False,
-                default=str,
+                aggressive=aggressive,
             )
             user = (
                 f"用户问题：{message}\n\n"
-                f"COMPACT EVIDENCE CONTEXT:\n{serialized}"
+                f"STRUCTURED EVIDENCE SUMMARY:\n{serialized}"
             )
             try:
                 answer = self.llm.complete(system, user)
@@ -1132,7 +1145,6 @@ class HybridResearchQASkill:
                         "aggressive_retry": aggressive,
                         "error_type": last_error_type,
                         "context_chars": len(user),
-                        "selected_records": context["selection"]["selected_records"],
                     }
                 )
                 continue
@@ -1141,21 +1153,21 @@ class HybridResearchQASkill:
                     "status": "ok",
                     "aggressive_retry": aggressive,
                     "context_chars": len(user),
-                    "selected_records": context["selection"]["selected_records"],
                 }
             )
             emit_progress(
                 "llm_synthesis",
                 "completed",
                 "LLM 综合报告已生成",
-                "报告已基于有界证据上下文生成。",
+                "报告已基于场景化结构化摘要生成。",
                 context_chars=len(user),
             )
             return answer, {
                 "status": "ok",
-                "mode": "llm_compact_context",
+                "mode": "llm_structured_summary",
                 "attempts": attempts,
-                "context_selection": context["selection"],
+                "context_chars": len(user),
+                "summary_truncated": serialized.endswith("...[truncated]"),
             }
 
         answer = self._fallback_report(message=message, frame=frame)

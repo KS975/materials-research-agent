@@ -1658,6 +1658,9 @@ class MaterialIntelligenceSkill:
             "analysis_type": "similar_samples",
             "similarity_scope": scope,
             "reference_sample": reference_sample,
+            "reference_formula": reference.get("formula") or [],
+            "reference_process": reference.get("process") or [],
+            "reference_performance": reference.get("performance") or [],
             "reference_field_counts": {
                 section: len(reference_vectors[section]) for section in sections
             },
@@ -1790,6 +1793,9 @@ class MaterialIntelligenceSkill:
             )
             ranking.append({
                 "sample": item.get("sample") or {},
+                "formula": item.get("formula") or [],
+                "process": item.get("process") or [],
+                "performance": item.get("performance") or [],
                 "similarity_percent": str(
                     (combined_score * 100).quantize(Decimal("0.01"))
                 ),

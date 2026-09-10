@@ -95,9 +95,9 @@ def test_hybrid_research_unifies_sources_before_synthesis():
     assert frame["source_summary"]["mysql"] > 0
     assert frame["source_summary"]["vector_api"] == 1
     assert frame["source_summary"]["dialog"] == 1
-    assert "COMPACT EVIDENCE CONTEXT" in llm.calls[0][1]
+    assert "STRUCTURED EVIDENCE SUMMARY" in llm.calls[0][1]
     assert result["synthesis"]["status"] == "ok"
-    assert result["synthesis"]["context_selection"]["total_records"] > 0
+    assert result["synthesis"]["context_chars"] > 0
     assert result["evidence"][0]["record_id"]
 
 
@@ -156,7 +156,7 @@ def test_hybrid_research_retries_with_smaller_context_before_degradation():
         "failed",
         "ok",
     ]
-    assert len(llm.prompts[1]) < len(llm.prompts[0])
+    assert result["synthesis"]["mode"] == "llm_structured_summary"
 
 
 def test_hybrid_research_deterministic_fallback_keeps_structured_gap():

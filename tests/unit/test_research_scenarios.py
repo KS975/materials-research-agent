@@ -318,13 +318,16 @@ def test_aggregator_produces_similarity_summary_with_ranking() -> None:
         "status": "ok",
         "analysis_type": "similar_samples",
         "reference_sample": {"id": 932, "name": "EXP-128"},
-        "formula": [
+        "reference_formula": [
             {"name": "水", "value": 0.00125, "unit": "%", "resolved": True},
             {"name": "P507+煤油", "value": 0.0015, "unit": "%", "resolved": True},
         ],
         "ranking": [
             {
                 "sample": {"id": 933, "name": "EXP-097"},
+                "formula": [
+                    {"name": "水", "value": 0.0012, "unit": "%", "resolved": True},
+                ],
                 "similarity_percent": "92.00",
                 "section_details": {"formula": {"field_coverage_percent": "100.00"}},
             },
@@ -333,8 +336,10 @@ def test_aggregator_produces_similarity_summary_with_ranking() -> None:
     summary = aggregate_scenario_result(1, mysql_result)
     assert summary["aggregated_type"] == "similarity_ranking"
     assert summary["reference_sample"]["name"] == "EXP-128"
+    assert summary["reference_sample"]["formula"][0]["name"] == "水"
     assert summary["ranking"][0]["sample_id"] == 933
     assert summary["ranking"][0]["similarity"] == "92.00"
+    assert summary["ranking"][0]["formula"][0]["value"] == 0.0012
 
 
 def test_aggregator_produces_material_summary_with_cleaned_name() -> None:
