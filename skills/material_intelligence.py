@@ -1560,6 +1560,9 @@ class MaterialIntelligenceSkill:
             if row_matches:
                 matched_rows.append({
                     "sample": sample_item.get("sample") or {},
+                    "formula": sample_item.get("formula") or [],
+                    "process": sample_item.get("process") or [],
+                    "performance": sample_item.get("performance") or [],
                     "matched_conditions": details,
                 })
 
@@ -1629,7 +1632,7 @@ class MaterialIntelligenceSkill:
         top_n: Any,
     ) -> dict[str, Any]:
         scope = str(similarity_scope or "combined").strip().casefold()
-        if scope not in {"formula", "process", "combined"}:
+        if scope not in {"formula", "process", "performance", "combined"}:
             scope = "combined"
         try:
             result_limit = max(1, min(int(top_n), 20))
@@ -1643,6 +1646,8 @@ class MaterialIntelligenceSkill:
             if scope == "formula"
             else ("process",)
             if scope == "process"
+            else ("performance",)
+            if scope == "performance"
             else ("formula", "process")
         )
         reference_vectors = {

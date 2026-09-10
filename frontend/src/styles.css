@@ -364,6 +364,7 @@ aside{min-height:0;padding:22px 14px 16px}.brand{flex:0 0 auto;padding:0 8px 20p
 .dataCardBadge.good{color:#18795d;background:#ecfdf5;border:1px solid #a7f3d0}
 .dataCardBadge.warn{color:#b45309;background:#fffbeb;border:1px solid #fde68a}
 .dataCardBadge.neutral{color:#475467;background:#f8fafc;border:1px solid #e5e7eb}
+.dataCardBadge.bad{color:#b42318;background:#fff1f0;border:1px solid #fecaca}
 .dataCardTableWrap{overflow-x:auto;padding:0 12px 10px}
 .dataCardTableWrap table{width:100%;min-width:420px;border-collapse:collapse;font-size:11.5px}
 .dataCardTableWrap th{padding:7px 8px;border-bottom:1px solid #e5e7eb;color:#667085;background:#f8fafc;text-align:left;white-space:nowrap}

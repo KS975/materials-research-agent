@@ -1,13 +1,24 @@
 const RECOMMENDATION_CLASS = {
   "首选复用": "good",
-  "可参考": "neutral",
-  "谨慎参考": "warn",
+  "高性能备选": "neutral",
+  "谨慎使用": "warn",
+  "不推荐": "bad",
 };
 
-function formatValue(value) {
+function formatValue(value, precision) {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "number" && Number.isFinite(value)) {
-    return Number.isInteger(value) ? String(value) : value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+    if (Number.isInteger(value)) return String(value);
+    const digits = precision === undefined ? 4 : precision;
+    return value.toFixed(digits).replace(/0+$/, "").replace(/\.$/, "");
+  }
+  if (typeof value === "string") {
+    const numeric = Number(value.trim());
+    if (Number.isFinite(numeric) && value.trim() !== "") {
+      if (Number.isInteger(numeric)) return String(numeric);
+      const digits = precision === undefined ? 4 : precision;
+      return numeric.toFixed(digits).replace(/0+$/, "").replace(/\.$/, "");
+    }
   }
   return String(value);
 }
@@ -15,12 +26,13 @@ function formatValue(value) {
 function FieldRows({ title, fields }) {
   const rows = Array.isArray(fields) ? fields.filter(Boolean) : [];
   if (!rows.length) return null;
+  const precision = title === "性能" || title === "服役性能" ? 3 : 4;
   return <div className="dataCardSection">
     <small>{title}</small>
     <div className="dataCardFields">
       {rows.map((field, index) => <div className="dataCardField" key={index}>
         <span>{field.name || "-"}</span>
-        <b>{formatValue(field.value)}{field.unit ? ` ${field.unit}` : ""}</b>
+        <b>{formatValue(field.value, precision)}{field.unit ? ` ${field.unit}` : ""}</b>
       </div>)}
     </div>
   </div>;

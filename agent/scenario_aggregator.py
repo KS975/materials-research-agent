@@ -52,6 +52,7 @@ def _similarity_summary(scenario_id: int, result: Mapping[str, Any]) -> dict[str
             "sample_id": sample.get("id") or sample.get("name"),
             "name": sample.get("name"),
             "similarity": item.get("similarity_percent") or item.get("score"),
+            "degrade_level": item.get("degrade_level"),
             "section_details": item.get("section_details") or item.get("details") or {},
         }
         for section in ("formula", "process", "performance", "service_performance"):
@@ -316,6 +317,7 @@ def _card_item(row: Mapping[str, Any]) -> dict[str, Any]:
         "sample_id": row.get("sample_id"),
         "sample_name": row.get("name") or row.get("sample_name"),
         "similarity": row.get("similarity"),
+        "degrade_level": row.get("degrade_level"),
         "formula": row.get("formula") or [],
         "process": row.get("process") or [],
         "performance": row.get("performance") or [],
@@ -325,16 +327,20 @@ def _card_item(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _recommendation(row: Mapping[str, Any]) -> str:
+    if row.get("degrade_level"):
+        return "谨慎使用"
     raw = row.get("similarity")
     try:
         score = float(raw)
     except (TypeError, ValueError):
-        return "可参考"
+        return "高性能备选"
     if score >= 90:
         return "首选复用"
-    if score >= 80:
-        return "可参考"
-    return "谨慎参考"
+    if score >= 70:
+        return "高性能备选"
+    if score >= 50:
+        return "谨慎使用"
+    return "不推荐"
 
 
 def _similarity_card(summary: Mapping[str, Any]) -> dict[str, Any]:

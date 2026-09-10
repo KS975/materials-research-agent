@@ -31,6 +31,23 @@ _EXPLICIT_IDENTIFIER = re.compile(
     r"(?<![A-Za-z0-9_.-])(?:[A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*|\d{2,})"
     r"(?![A-Za-z0-9_.-])"
 )
+
+
+def _is_numeric_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return False
+        try:
+            float(text)
+            return True
+        except (TypeError, ValueError):
+            return False
+    return False
 _STAGE4_SCENARIOS = {8, 9, 10, 11, 18}
 _DISPLAY_SCENARIOS = {15, 16, 20}
 _INTERFACE_RESERVED_SCENARIOS = {19}
@@ -524,6 +541,8 @@ class HybridResearchQASkill:
                     if any(marker in message for marker in ("配方", "原料", "组分"))
                     else "process"
                     if any(marker in message for marker in ("工艺", "流程", "加工"))
+                    else "performance"
+                    if any(marker in message for marker in ("性能", "指标", "物性"))
                     else "combined"
                 ),
                 "top_n": int(args.get("top_n") or 5),
@@ -947,10 +966,11 @@ class HybridResearchQASkill:
             performance = [
                 item
                 for item in row.get("performance") or []
-                if isinstance(item.get("value"), (int, float))
+                if _is_numeric_value(item.get("value"))
             ][:10]
             matches.append({
                 "sample": row.get("sample") or {},
+                "formula": row.get("formula") or [],
                 "matched_fields": fields,
                 "performance": performance,
             })
@@ -1191,15 +1211,21 @@ class HybridResearchQASkill:
 5. 冲突必须保留差异和来源，不得静默选择一方。
 6. 证据不足时明确写缺口；不得编造实验、性能、原料或历史结论。
 7. 相关性不得写成因果。
-8. 最终回答包含：结论、证据依据、风险/缺口。不要暴露内部表名、SQL、凭证或向量服务地址。
+8. 最终回答只包含两段：结论（含关键数据、推荐、必要推理）和风险/缺口。不要单独写"证据依据"段，也不要重复罗列系统卡片已展示的数据。
 9. source_relation.level 不是 ENTITY_LINKED 时，不得把向量文档写成同一样品、实验或配方的结构化事实。
-10. structured_summary 中的数值是原始字段单位，未做物理换算。
+10. structured_summary 中的数值必须原样引用，不得修改、四舍五入或估算。
+11. structured_summary 中的数值是原始字段单位，未做物理换算。
+12. 如果 structured_summary 含 degrade_level 或 missing_fields，结论开头必须明确说明缺了什么维度（例如"暂无工艺参数记录，以下按原料组成匹配"），不得答非所问。
 回答中文，结构简洁。
 """
         summary = aggregated_summary if isinstance(aggregated_summary, dict) else {}
+        degrade_level = summary.get("degrade_level")
+        missing_fields = summary.get("missing_fields") or []
         context = {
             "schema_version": 2,
             "structured_summary": summary,
+            "degrade_level": degrade_level,
+            "missing_fields": missing_fields,
             "source_relation": source_relation,
             "source_summary": frame.source_summary,
             "conflict_count": len(frame.conflicts),
