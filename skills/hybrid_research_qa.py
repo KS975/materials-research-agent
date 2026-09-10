@@ -46,6 +46,17 @@ _INTERNAL_TABLE_NAMES = (
     "eln_verify_exp",
     "archive_data",
 )
+_SCENARIO_VECTOR_KEYWORDS: dict[int, tuple[str, ...]] = {
+    7: ("失败", "配方", "实验"),
+    8: ("关键变量", "影响因素"),
+    9: ("工艺窗口", "稳定窗口", "稳定区间"),
+    10: ("性能冲突", "冲突分析", "权衡"),
+    11: ("批次差异",),
+    15: ("检测结果", "关联"),
+    16: ("图谱", "曲线", "DSC", "TGA", "粒径"),
+    18: ("阶段总结", "阶段报告"),
+    20: ("跨项目", "复用"),
+}
 
 
 
@@ -1092,6 +1103,24 @@ class HybridResearchQASkill:
         if scenario_id == 17:
             keyword = str(args.get("keyword") or args.get("project_name") or "")
             return keyword if keyword else default_query
+        keywords = _SCENARIO_VECTOR_KEYWORDS.get(scenario_id)
+        if keywords is not None:
+            identifier = str(args.get("identifier") or "")
+            if not identifier:
+                found = _EXPLICIT_IDENTIFIER.findall(default_query)
+                identifier = found[-1] if len(found) == 1 else ""
+            keyword = str(args.get("keyword") or "")
+            matched = [item for item in keywords if item in default_query]
+            filter_terms = [
+                str(item.get("field") or item.get("section") or "")
+                for item in (args.get("filters") or [])
+                if isinstance(item, dict)
+            ]
+            parts = [identifier, keyword, *matched, *filter_terms]
+            query = " ".join(part for part in parts if part).strip()
+            # Fall back to the canonical scenario keywords instead of the raw
+            # question so long sentences do not dilute vector similarity.
+            return query or " ".join(keywords)
         return default_query
 
     @staticmethod

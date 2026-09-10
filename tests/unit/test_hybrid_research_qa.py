@@ -213,6 +213,21 @@ def test_sanitize_answer_adds_causal_caveat_for_analysis_scenarios():
     assert "不能据此直接判定因果" in cleaned
 
 
+def test_vector_query_extracts_keywords_instead_of_full_sentence():
+    vq = HybridResearchQASkill._vector_query
+    spectrum = vq("查 EXP-128 的 DSC 图谱特征", {}, 16)
+    assert "EXP-128" in spectrum
+    assert "图谱" in spectrum
+    assert "DSC" in spectrum
+    assert "查" not in spectrum
+    assert vq("关键变量有哪些？结合历史资料。", {}, 8) == "关键变量"
+    assert vq("按项目分析批次差异，并结合历史资料。", {}, 11) == "批次差异"
+    assert vq("哪些项目的数据可以跨项目复用？", {}, 20) == "跨项目 复用"
+    # No keyword match falls back to canonical scenario keywords, not the raw question.
+    fallback = vq("请帮我分析一下这个问题", {}, 10)
+    assert fallback == "性能冲突 冲突分析 权衡"
+
+
 def test_hybrid_research_reuses_structured_similarity_workflow():
     calls = []
 
