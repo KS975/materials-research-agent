@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 import re
 from threading import RLock
 from time import monotonic
-from typing import Any
+from typing import Any, Mapping
 
 from agent.field_catalog import (
     bind_metric_to_catalog,
@@ -1675,15 +1675,22 @@ class MaterialIntelligenceSkill:
             "result_limit": result_limit,
         }
         if not usable_reference_sections:
+            degraded = cls._degraded_similarity_ranking(
+                source, reference, result_limit=result_limit
+            )
             return {
                 "status": "insufficient_reference_fields",
                 **common_payload,
-                "comparable_candidate_count": 0,
-                "ranking": [],
+                "comparable_candidate_count": len(degraded["ranking"]),
+                "ranking": degraded["ranking"],
+                "degrade_level": degraded["degrade_level"],
+                "missing_fields": degraded.get("missing_fields", []),
                 "evidence": [{"source": "eln_sample", "record_id": reference_id}],
-                "warnings": list(source.get("warnings") or []) + [
+                "warnings": list(source.get("warnings") or [])
+                + [
                     "参照样品在所选范围内没有可用于计算的唯一数值字段。"
-                ],
+                ]
+                + list(degraded.get("warnings") or []),
             }
 
         candidates: list[tuple[dict[str, Any], dict[str, dict[tuple[str, str, str], dict[str, Any]]]]] = []
@@ -1825,6 +1832,12 @@ class MaterialIntelligenceSkill:
         ranking = ranking[:result_limit]
         for row in ranking:
             row.pop("_score", None)
+        degraded: dict[str, Any] | None = None
+        if not ranking:
+            degraded = cls._degraded_similarity_ranking(
+                source, reference, result_limit=result_limit
+            )
+            ranking = degraded["ranking"]
         evidence = [{"source": "eln_sample", "record_id": reference_id}]
         evidence.extend({
             "source": "eln_sample",
@@ -1837,6 +1850,8 @@ class MaterialIntelligenceSkill:
             "excluded_candidate_count": len(candidates) - comparable_count,
             "exclusion_counts": dict(exclusion_counts),
             "ranking": ranking,
+            "degrade_level": (degraded or {}).get("degrade_level"),
+            "missing_fields": (degraded or {}).get("missing_fields", []),
             "results_truncated": comparable_count > result_limit,
             "calculation_policy": (
                 "相似度由后端确定性计算：仅比较名称和单位均一致的唯一数值字段；"
@@ -1848,8 +1863,136 @@ class MaterialIntelligenceSkill:
                 "语义相似或性能等价性证明。"
             ),
             "evidence": evidence,
-            "warnings": list(source.get("warnings") or []),
+            "warnings": list(source.get("warnings") or [])
+            + list((degraded or {}).get("warnings") or []),
         }
+
+    @classmethod
+    def _degraded_similarity_ranking(
+        cls,
+        source: dict[str, Any],
+        reference: dict[str, Any],
+        *,
+        result_limit: int,
+    ) -> dict[str, Any]:
+        """Level-1/2 fallback when numeric similarity cannot be computed.
+
+        Level 1 matches formula material names by Jaccard similarity.
+        Level 2 falls back to recent samples in the same project.
+        Level 3 reports the missing fields explicitly.
+        """
+        ref_sample = reference.get("sample") or {}
+        ref_id = ref_sample.get("id")
+        ref_project = ref_sample.get("project_id")
+        ref_names = cls._formula_name_set(reference.get("formula"))
+        samples = list(source.get("samples") or [])
+
+        if ref_names:
+            scored: list[tuple[float, dict[str, Any]]] = []
+            for item in samples:
+                if not isinstance(item, Mapping):
+                    continue
+                sample = item.get("sample") or {}
+                if str(sample.get("id")) == str(ref_id):
+                    continue
+                candidate_names = cls._formula_name_set(item.get("formula"))
+                if not candidate_names:
+                    continue
+                union = ref_names | candidate_names
+                if not union:
+                    continue
+                score = len(ref_names & candidate_names) / len(union)
+                if score > 0:
+                    scored.append((score, item))
+            if scored:
+                scored.sort(
+                    key=lambda pair: (
+                        -pair[0],
+                        str((pair[1].get("sample") or {}).get("id") or ""),
+                    )
+                )
+                ranking = [
+                    {
+                        "sample": item.get("sample") or {},
+                        "formula": item.get("formula") or [],
+                        "process": item.get("process") or [],
+                        "performance": item.get("performance") or [],
+                        "similarity_percent": str(round(score * 100, 2)),
+                        "degrade_level": "formula_name_jaccard",
+                    }
+                    for score, item in scored[:result_limit]
+                ]
+                return {
+                    "degrade_level": "formula_name_jaccard",
+                    "ranking": ranking,
+                    "missing_fields": [],
+                    "warnings": [
+                        "参照样品缺少可计算的数值型字段，已降级为基于原料组成名称的相似度；"
+                        "结果仅供参考，不代表用量或性能接近。"
+                    ],
+                }
+
+        if ref_project is not None:
+            same_project = [
+                item
+                for item in samples
+                if isinstance(item, Mapping)
+                and str((item.get("sample") or {}).get("id")) != str(ref_id)
+                and str((item.get("sample") or {}).get("project_id")) == str(ref_project)
+            ]
+            if same_project:
+                same_project.sort(
+                    key=lambda item: str(
+                        (item.get("sample") or {}).get("create_time") or ""
+                    ),
+                    reverse=True,
+                )
+                ranking = [
+                    {
+                        "sample": item.get("sample") or {},
+                        "formula": item.get("formula") or [],
+                        "process": item.get("process") or [],
+                        "performance": item.get("performance") or [],
+                        "similarity_percent": None,
+                        "degrade_level": "same_project_recent",
+                    }
+                    for item in same_project[:result_limit]
+                ]
+                return {
+                    "degrade_level": "same_project_recent",
+                    "ranking": ranking,
+                    "missing_fields": [],
+                    "warnings": [
+                        "参照样品缺少可计算的配方/工艺数值字段，已降级为同项目历史样品列表；"
+                        "该列表不是相似度排序。"
+                    ],
+                }
+
+        return {
+            "degrade_level": "none",
+            "ranking": [],
+            "missing_fields": [
+                "craft_param（工艺参数为空或无数值）",
+                "recipes（配方为空或未解析）",
+            ],
+            "warnings": [
+                "参照样品缺少可用于相似度计算的配方/工艺数值字段，且同项目下没有可比样品；"
+                "建议补充 eln_sample.craft_param 或 recipes 字段后重查。"
+            ],
+        }
+
+    @staticmethod
+    def _formula_name_set(fields: Any) -> set[str]:
+        if not isinstance(fields, list):
+            return set()
+        names: set[str] = set()
+        for item in fields:
+            if not isinstance(item, Mapping):
+                continue
+            name = str(item.get("name") or "").strip().casefold()
+            if name:
+                names.add(name)
+        return names
 
     @classmethod
     def _data_quality(cls, source: dict[str, Any]) -> dict[str, Any]:

@@ -77,6 +77,8 @@ def _similarity_summary(scenario_id: int, result: Mapping[str, Any]) -> dict[str
         "ranking": top,
         "ranking_count": len(ranking),
         "comparable_candidate_count": result.get("comparable_candidate_count", 0),
+        "degrade_level": result.get("degrade_level"),
+        "missing_fields": result.get("missing_fields") or [],
         "status": result.get("status"),
         "warnings": _compact_warnings(result),
     }

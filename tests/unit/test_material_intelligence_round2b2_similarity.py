@@ -162,3 +162,88 @@ def test_progress_events_are_request_local_and_user_safe():
     assert isinstance(events[0]["elapsed_ms"], int)
     assert events[0]["schema_version"] == "1.1"
     assert events[0]["source"] == "backend"
+
+
+def test_degraded_similarity_falls_back_to_formula_name_jaccard():
+    reference = {
+        "sample": {"id": 1, "name": "EXP-1", "project_id": 115},
+        "formula": [field("PC", "60", "%")],
+        "process": [],
+        "performance": [],
+    }
+    source = {
+        "samples": [
+            {
+                "sample": {"id": 1, "name": "EXP-1", "project_id": 115},
+                "formula": [field("PC", "60", "%")],
+            },
+            {
+                "sample": {"id": 2, "name": "EXP-2", "project_id": 115},
+                "formula": [field("PC", "50", "%")],
+            },
+            {
+                "sample": {"id": 3, "name": "EXP-3", "project_id": 115},
+                "formula": [field("ABS", "50", "%")],
+            },
+        ],
+    }
+    result = MaterialIntelligenceSkill._degraded_similarity_ranking(
+        source, reference, result_limit=5
+    )
+    assert result["degrade_level"] == "formula_name_jaccard"
+    assert [row["sample"]["id"] for row in result["ranking"]] == [2]
+
+
+def test_degraded_similarity_falls_back_to_same_project_recent():
+    reference = {
+        "sample": {"id": 1, "name": "EXP-1", "project_id": 115},
+        "formula": [],
+        "process": [],
+        "performance": [],
+    }
+    source = {
+        "samples": [
+            {
+                "sample": {"id": 1, "name": "EXP-1", "project_id": 115},
+                "formula": [],
+            },
+            {
+                "sample": {
+                    "id": 2,
+                    "name": "EXP-2",
+                    "project_id": 115,
+                    "create_time": "2026-01-01",
+                },
+                "formula": [],
+            },
+            {
+                "sample": {
+                    "id": 3,
+                    "name": "EXP-3",
+                    "project_id": 115,
+                    "create_time": "2026-02-01",
+                },
+                "formula": [],
+            },
+        ],
+    }
+    result = MaterialIntelligenceSkill._degraded_similarity_ranking(
+        source, reference, result_limit=5
+    )
+    assert result["degrade_level"] == "same_project_recent"
+    assert [row["sample"]["id"] for row in result["ranking"]] == [3, 2]
+
+
+def test_degraded_similarity_reports_missing_fields_when_nothing_available():
+    reference = {
+        "sample": {"id": 1, "name": "EXP-1", "project_id": None},
+        "formula": [],
+        "process": [],
+        "performance": [],
+    }
+    result = MaterialIntelligenceSkill._degraded_similarity_ranking(
+        {"samples": []}, reference, result_limit=5
+    )
+    assert result["degrade_level"] == "none"
+    assert result["ranking"] == []
+    assert result["missing_fields"]
